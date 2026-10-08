@@ -17,12 +17,12 @@ self-hosted in `public/`), Vitest 5, TypeScript 7, procedural Web Audio + proced
 - **Real webcam body tracking works** (user-tested). Fake-camera tests pass too.
 - 2P split-screen race, leaderboard with crash selfies, Hall of Fame booth page, sounds/music.
 - Endless speed ramp: it keeps getting faster up to a 45–48 m/s cap.
-- Gates: `npx tsc --noEmit -p .` clean, unit tests green, `node e2e/run.mjs` passed 12/12 before the power-up work.
+- Gates: typecheck clean, all unit tests green, `node e2e/run.mjs` 12/12. Latest round added swept collisions, ~120 ms faster lane detection, a compact tutorial pill, a simpler first-time flow, a once-only tutorial, and an arm-mimic runner (Settings → "Copy my moves").
 
 ## In progress / open items
 1. **New power-ups** (`jetpack`, `slowmo`, `star`, `coinRain`) and the harder tuning are done across game, render, UI and audio. All 196 tests pass. Jetpack and coinRain coins are laid by World, not the generator, so 2P tracks stay identical.
 2. **Deployed on Vercel:** https://body-surfers-steel.vercel.app (project `body-surfers`, team tiger-strakes-projects). Redeploy with `npx vercel --prod --yes --name body-surfers`. The `--name` flag is needed because the folder name has a space.
-3. **Nothing is committed to git yet.** The repo is initialised with no commits. Commit before risky changes.
+3. **Git:** private repo https://github.com/tigerstrake/body-surfers (branch `main`). Commit and push after each working change. A Vercel deploy always needs `npx vercel --prod --yes --name body-surfers`; check that the output says `READY` and that the live site shows the change.
 4. Nice-to-haves: seated/arms-only accessibility mode; runner skins; "save my card" button (reuse `renderSelfieCard` in `src/hall/card.ts`); more crash quips and names.
 
 ## How to run
