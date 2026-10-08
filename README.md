@@ -5,10 +5,13 @@ watches you: step left or right to switch lanes, jump to jump, squat to roll. Tw
 race split-screen on the same course. When you crash, the game takes a selfie of your crash
 face and puts it on the leaderboard.
 
-Runs in the browser. No install, no controllers, and it works offline once loaded.
+Runs in the browser. No install, no controllers. The pose models and WASM runtime are
+self-hosted, so the game does not need a CDN at runtime.
 
-![Gameplay GIF placeholder](docs/media/gameplay.gif)
-<!-- TODO(verify): record docs/media/gameplay.gif (1P run + 2P race, ~8 s each) -->
+**Play it live:** https://body-surfers-steel.vercel.app
+
+You need a laptop with a webcam. Chrome is recommended (the game is developed and tested in
+Chrome). On a Mac, turn off Center Stage first (see [Tracking tips](#tracking-tips)).
 
 ---
 
@@ -24,8 +27,9 @@ camera), allow camera access, step back, and raise both hands.
 
 No camera? Open `http://localhost:5173/?input=keyboard`.
 
-Requirements: Node 20+ (TODO(verify) minimum version), a recent Chrome, Edge or Safari with
-WebGL2, and a webcam. Developed on M-series MacBooks.
+Requirements: Node 22.12+ (Vite 8 alone runs on 20.19+, but Vitest 5 needs 22.12+), a laptop
+webcam, and a browser with WebGL2. Chrome is recommended; it is the browser the game and its
+Playwright tests are run in. Developed on M-series MacBooks.
 
 The MediaPipe WASM runtime and pose models are already in `public/`. If `public/mediapipe/wasm`
 is missing, run `npm run copy-mediapipe`.
@@ -51,11 +55,34 @@ The runner waits until every player is visible and calibrated. If it stays at 1,
 the camera hint or open **CAMERA SETTINGS**; **PLAY WITH KEYBOARD** explicitly skips body controls.
 Camera or model errors are shown on the start screen, including when using `?autostart=1`.
 
-**Tutorial.** The first ~25 seconds teach jump, squat and step with big hints. It can be
-turned off in settings.
+**Tutorial.** The first 350 m (about 27 seconds at the fixed tutorial speed of 13 m/s) teach
+jump, squat and step with big hints, and crashes there are not fatal. The tutorial shows
+once per browser: after a run gets past it, later runs skip it. Turning **Tutorial** back
+on in Settings shows it again.
 
-**Power-ups:** magnet (pulls coins), 2x score, super sneakers (jump onto trains), hoverboard
-(survives one crash). Ramps take you up onto train roofs.
+**Countdown with nobody in view.** If the camera sees no one for 8 seconds during the
+countdown, the run starts anyway and the arrow keys steer.
+
+**Copy my moves.** In camera mode the runner's arms and upper body mirror yours while the
+legs keep running. It is on by default; toggle it in Settings under **Copy my moves**.
+
+**Speed.** The run starts at 13 m/s, eases toward 27 m/s, and keeps ramping by a further
+0.05 m/s every second, up to a cap of 48 m/s (reached after about 7 minutes of running).
+
+**Power-ups (8):**
+
+| Power-up | Duration | Effect |
+|---|---|---|
+| Magnet | 12 s | Pulls in coins within 14 m |
+| Multiplier | 15 s | 2x score |
+| Super sneakers | 12 s | Super jump (4 m apex), lands on train roofs |
+| Hoverboard | 25 s | Absorbs one crash, then 1.5 s of invulnerability |
+| Jetpack | 7 s | Flies 6 m up over the trains along a coin trail |
+| Slow-mo | 8 s | The world runs at 60% speed |
+| Star | 8 s | Invincible; smash through obstacles |
+| Coin rain | 10 s | Dense coin lines in every lane |
+
+Ramps take you up onto train roofs.
 
 **Crash.** You get a crash selfie, your score and rank, and an editable fun name. Raise both
 hands to go again.
@@ -105,6 +132,10 @@ Keyboard and camera are both always active, so the keyboard works as a fallback 
 - People walking behind the players are ignored as spectators. Players are identified by
   size (closest to the camera) and locked once they join.
 - For two players, stand about 1.5 m apart.
+- **Turn off Center Stage on Macs.** On M-series MacBooks, Center Stage (and Studio Light)
+  pans and crops the image to follow you, which breaks the absolute lane zones. Turn them
+  off in Control Center → Video Effects while the camera is in use.
+- **Dim light** drops many webcams to around 15 fps, which makes jumps laggy. Face a light.
 
 ## Settings and tuning
 
@@ -116,13 +147,14 @@ Press `` ` `` (backtick) to open the settings panel. Everything is saved to `loc
 | Pose model | `lite` | `full` is more accurate and slower |
 | Quality | `high` | `low` disables shadows and caps pixel ratio at 1 |
 | Mute, music volume, SFX volume | off, 0.6, 0.8 | |
-| Tutorial | on | |
+| Tutorial | on | Switches itself off once a run gets past the tutorial (once per browser). Turn it on again to replay it. |
 | Show webcam | on | Webcam overlay with skeleton, lane zones, jump line (green) and duck line (orange) |
 | Lane threshold | 0.9 (0.5 to 1.5) | How far from center (in shoulder widths) to enter a side lane. Lower = smaller steps. |
 | Lane hysteresis | 0.3 (0.1 to 0.6) | How far back toward center before leaving a side lane. Raise if lanes flicker. |
 | Jump threshold | 0.3 (0.15 to 0.6) | Torso rise needed to jump. Lower if jumps are missed, raise for false jumps. |
 | Duck threshold | 0.45 (0.25 to 0.8) | Torso drop needed to roll |
 | Smoothing | 0.5 (0 to 1) | Higher = steadier but laggier |
+| Copy my moves | on | The runner's arms and upper body mirror yours (camera mode only) |
 | Mirror | on | Selfie-style view |
 
 The panel also has **Reset defaults** and **Clear leaderboard** (with an inline confirm).
@@ -150,8 +182,9 @@ browser**. It reads the leaderboard from `localStorage` and receives live scores
 from the game over a `BroadcastChannel`. Open `http://localhost:5173/hall.html` in a second
 window and drag it to the other screen.
 
-TODO(verify): hall.html is still a stub at the time of writing; confirm the layout and live
-feed work once the Booth Display module lands.
+The page shows the photo leaderboard, a "now playing" panel with live scores, and a result
+celebration when a run ends. `hall.html?demo=1` runs it on fake in-memory data (it never
+writes storage); add `tv=1` on a booth monitor to hide the cursor and the play button.
 
 ## Scripts
 
@@ -161,7 +194,9 @@ feed work once the Booth Display module lands.
 | `npm run build` | Typecheck, then production build to `dist/` (game + hall) |
 | `npm run preview` | Serve the built `dist/` |
 | `npm run typecheck` | `tsc --noEmit` |
-| `npm test` / `npm run test:watch` | Vitest unit tests |
+| `npm test` / `npm run test:watch` | Vitest unit tests (238 tests in 15 files) |
+| `node e2e/run.mjs` | 12 Playwright end-to-end scenarios in headless system Chrome |
+| `node e2e/perf.mjs` | Frame-time benchmark (headless; numbers are a lower bound of a real GPU) |
 | `npm run shot -- --url <url> --out shots/x.png` | Headless Chrome screenshot, key presses, error check (see the header of `scripts/shot.mjs`) |
 | `npm run copy-mediapipe` | Copy the MediaPipe WASM runtime into `public/` |
 | `bash scripts/check.sh [--quick]` | Full gate: typecheck, tests, build, then headless smoke runs (1P and 2P autopilot, boot screen, fake-camera path) against the running dev server |
@@ -217,6 +252,9 @@ deterministic and unit-tested.
 
 ## Deployment
 
+The live build is at https://body-surfers-steel.vercel.app (Vercel). Because the folder name
+contains a space, deploy with `npx vercel --prod --yes --name body-surfers`.
+
 ```bash
 npm run build        # outputs dist/ (index.html + hall.html + assets)
 npx vite preview     # local check
@@ -229,9 +267,11 @@ anywhere other than `localhost`. The pose models are about 6 MB (lite) and 9 MB 
 
 ## Privacy
 
-All pose detection runs locally in the browser. No video or images are uploaded anywhere.
-Crash selfies are small JPEGs stored only in this browser's `localStorage`, together with
-names and scores. Clear them from Settings → Clear leaderboard, or by clearing site data.
+- Pose tracking runs entirely in the browser. Camera video never leaves the device.
+- Crash selfies are small JPEGs stored only in this browser's `localStorage`, together with
+  names and scores. Clear them from Settings → Clear leaderboard, or by clearing site data.
+- The game itself has no backend and sends no data. However, MediaPipe's library sends
+  anonymous usage pings to a Google logging endpoint (`odml.pa.googleapis.com`).
 
 ## Credits
 
@@ -243,4 +283,4 @@ names and scores. Clear them from Settings → Clear leaderboard, or by clearing
 - All art, music and sound effects are procedural and generated in code.
 - Inspired by Subway Surfers (SYBO / Kiloo). This is an unaffiliated fan project.
 
-Built at a hackathon. TODO(verify): event name, team members, license for this repo.
+Built at a casual hackathon with friends. This repository does not include a license file.

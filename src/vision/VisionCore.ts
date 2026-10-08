@@ -18,13 +18,18 @@ class SlotFilters {
   readonly gesture: OneEuroFilter[] = [];
   readonly overlay: OneEuroFilter[] = [];
   readonly gestureLm: Landmark[] = [];
+  /** Preallocated snapshot of gestureLm exposed via VisionCore.latest (no per-frame allocation). */
+  readonly latestLm: Landmark[] = [];
   constructor(smoothing: number) {
     const mc = minCutoffForSmoothing(smoothing);
     for (let i = 0; i < LANDMARK_COUNT * 2; i++) {
       this.gesture.push(new OneEuroFilter(C.gestureMinCutoff, C.gestureBeta, C.gestureDCutoff));
       this.overlay.push(new OneEuroFilter(mc, C.beta, C.dCutoff));
     }
-    for (let i = 0; i < LANDMARK_COUNT; i++) this.gestureLm.push({ x: 0, y: 0, z: 0, visibility: 0 });
+    for (let i = 0; i < LANDMARK_COUNT; i++) {
+      this.gestureLm.push({ x: 0, y: 0, z: 0, visibility: 0 });
+      this.latestLm.push({ x: 0, y: 0, z: 0, visibility: 0 });
+    }
   }
   reset(): void {
     for (const f of this.gesture) f.reset();
@@ -204,7 +209,16 @@ export class VisionCore {
       }
       this.emitSlot = slot;
       det.update(g, t, yScale, this.tuning, this.emitFn);
-      this.latest[s] = g.map((l) => ({ ...l }));
+      const snap = f.latestLm;
+      for (let i = 0; i < LANDMARK_COUNT; i++) {
+        const src = g[i];
+        const dst = snap[i];
+        dst.x = src.x;
+        dst.y = src.y;
+        dst.z = src.z;
+        dst.visibility = src.visibility;
+      }
+      this.latest[s] = snap;
       people.push({
         slot,
         landmarks: overlay,

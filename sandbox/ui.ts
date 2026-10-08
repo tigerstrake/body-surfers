@@ -1,6 +1,7 @@
 // UI sandbox: renders the real UIManager against fake UIModels for every screen.
 // URL params: ?screen=boot|lobby|countdown|playing|paused|gameover &players=1|2
-//   &kb=1 (keyboard input mode) &settings=1 &mimic=0 &debug=1 &error=1 (boot error) &novideo=1
+//   &kb=1 (keyboard input mode) &settings=1 &mimic=0 &debug=1 &error=1|<raw message> (boot error) &novideo=1
+//   &only=1 (game over: you are the only leaderboard entry, rank 1) &rank=N (1P game-over rank)
 //   &reason=tracking-lost &resume=1 (paused) &out=1 (2P playing: P2 crashed) &empty=1 (no scores)
 //   &hint=jump|duck|left|right|switch &mirror=0 &bar=0 (hide the switcher)
 import { UIManager } from '../src/ui';
@@ -304,8 +305,8 @@ function selfie(hue: number, label: string): string {
 const NAMES = ['Turbo Pickle', 'Captain Noodle', 'Sir Hops-a-Lot', 'Disco Llama', 'Mega Waffle', 'Lil Zoomer', 'Rocket Bean', 'Funky Tofu', 'Sneaky Taco', 'Nacho Ninja'];
 const leaderboard: LeaderboardEntry[] = flag('empty')
   ? []
-  : NAMES.map((name, i) => ({
-      id: `e${i}`,
+  : (flag('only') ? NAMES.slice(0, 1) : NAMES).map((name, i) => ({
+      id: flag('only') ? 'e2' : `e${i}`,
       name,
       score: Math.round(48000 / (i + 1) + 300),
       coins: 300 - i * 20,
@@ -360,7 +361,7 @@ let names: [string, string] = ['Turbo Pickle', 'Disco Llama'];
 
 function results(): PlayerResult[] {
   const r: PlayerResult[] = [
-    { playerId: 0, name: names[0], score: 16300, coins: 212, distance: 1840, time: 94, photo: selfie(200, 'P1'), rank: players === 2 ? 1 : 3, entryId: 'e2' },
+    { playerId: 0, name: names[0], score: 16300, coins: 212, distance: 1840, time: 94, photo: selfie(200, 'P1'), rank: players === 2 ? 1 : flag('only') ? 1 : q.has('rank') ? Number(q.get('rank')) || null : 3, entryId: 'e2' },
   ];
   if (players === 2) r.push({ playerId: 1, name: names[1], score: 9800, coins: 133, distance: 1102, time: 61, photo: null, rank: 5, entryId: 'e4' });
   return r;
@@ -383,7 +384,7 @@ function model(t: number): UIModel {
     boot: {
       progress: bootP,
       message: bootP < 1 ? 'Loading body tracking…' : 'Ready!',
-      error: flag('error') ? 'NotAllowedError: Permission denied' : null,
+      error: flag('error') ? (q.get('error') === '1' || q.get('error') === 'true' ? 'NotAllowedError: Permission denied' : (q.get('error') ?? '')) : null,
       needsClick: bootP >= 1,
     },
     lobby: {

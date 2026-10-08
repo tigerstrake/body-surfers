@@ -5,6 +5,8 @@ import { PlayerAssigner } from './PlayerAssigner';
 import type { Candidate } from './features';
 import { type BodyParams, SYN_YSCALE, jumpLift, keyframes, makeBody, makeRng } from './synthetic';
 import { OneEuroFilter } from './OneEuroFilter';
+import { GestureDetector } from './GestureDetector';
+import { VISION_CONFIG as C } from './config';
 
 const FPS = 30;
 const DT = 1000 / FPS;
@@ -296,6 +298,16 @@ describe('PlayerAssigner', () => {
     expect(r.slots[0]).toBe(1);
   });
 
+  it('extra counts only valid (confident, large enough) candidates', () => {
+    const a = new PlayerAssigner();
+    const r = a.assign(
+      [cand(0.5, 0.15), { x: 0.2, y: 0.15, scale: 0.12, confidence: 0.1 }, cand(0.8, 0.01), cand(0.3, 0.1)],
+      0,
+    );
+    expect(r.slots[0]).toBe(0);
+    expect(r.extra).toBe(1);
+  });
+
   it('lockSlots(true, [1]) remaps slot 1 → slot 0', () => {
     const a = new PlayerAssigner();
     a.setPlayerCount(2);
@@ -323,3 +335,55 @@ describe('OneEuroFilter', () => {
   });
 });
 
+
+describe('GestureDetector calibration sampling', () => {
+  type CalibInternals = {
+    calibX: number[];
+    calibN: number;
+    centerX: number;
+    anchorY: number;
+    perspScale: number;
+    pushCalibSample(): void;
+  };
+
+  it('is deterministic and spans the whole calibration evenly when the buffer overflows', () => {
+    const fill = (): CalibInternals => {
+      const d = new GestureDetector(0);
+      d.startCalibration(0);
+      const g = d as unknown as CalibInternals;
+      const total = C.calibMaxSamples * 3 + 7;
+      for (let k = 0; k < total; k++) {
+        g.centerX = k / total; // sample "time" in [0, 1)
+        g.pushCalibSample();
+      }
+      return g;
+    };
+    const a = fill();
+    const b = fill();
+    expect(a.calibN).toBeLessThanOrEqual(C.calibMaxSamples);
+    expect(a.calibN).toBeGreaterThan(C.calibMaxSamples / 2);
+    expect(a.calibX.slice(0, a.calibN)).toEqual(b.calibX.slice(0, b.calibN));
+    const kept = a.calibX.slice(0, a.calibN);
+    // Evenly spaced and covering the whole run: no skew toward recent samples.
+    expect(kept[0]).toBe(0);
+    expect(kept[kept.length - 1]).toBeGreaterThan(0.9);
+    const mean = kept.reduce((p, q) => p + q, 0) / kept.length;
+    expect(mean).toBeGreaterThan(0.45);
+    expect(mean).toBeLessThan(0.55);
+    for (let i = 2; i < kept.length; i++) {
+      expect(kept[i] - kept[i - 1]).toBeCloseTo(kept[1] - kept[0], 9);
+    }
+  });
+});
+
+describe('VisionCore latest landmarks', () => {
+  it('reuses the same preallocated buffer every frame', () => {
+    const core = new VisionCore();
+    core.process([makeBody({ noise: 0 })], 0, SYN_YSCALE);
+    const first = core.latest[0];
+    expect(first).not.toBeNull();
+    core.process([makeBody({ noise: 0, rawX: 0.6 })], 33, SYN_YSCALE);
+    expect(core.latest[0]).toBe(first);
+    expect(first![0].x).not.toBe(0);
+  });
+});

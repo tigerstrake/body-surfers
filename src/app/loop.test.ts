@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FixedStepper } from './loop';
+import { FixedStepper, FrameP90 } from './loop';
 import { BoothBroadcaster, boothDue, stateMessage, type ChannelLike } from './booth';
 import type { BoothMessage, WorldSnapshot } from '../shared/types';
 import { emptySnapshot } from './guards';
@@ -40,5 +40,25 @@ describe('booth', () => {
       type: 'state', screen: 'playing', playerCount: 1, players: [{ score: 12, coins: 2, distance: 3, alive: false }],
     });
     expect(boothDue(1, 0, 0.25)).toBe(true);
+  });
+});
+
+describe('FrameP90', () => {
+  it('reports the 90th percentile once full', () => {
+    const p = new FrameP90(10);
+    for (let i = 1; i <= 9; i++) p.push(i);
+    expect(p.full).toBe(false);
+    p.push(10);
+    expect(p.full).toBe(true);
+    expect(p.value()).toBe(10);
+    for (let i = 0; i < 10; i++) p.push(16);
+    expect(p.value()).toBe(16);
+    p.reset();
+    expect(p.value()).toBe(0);
+  });
+  it('a few slow frames among fast ones stay under the p90', () => {
+    const p = new FrameP90(60);
+    for (let i = 0; i < 60; i++) p.push(i % 20 === 0 ? 50 : 16.7);
+    expect(p.value()).toBeCloseTo(16.7);
   });
 });

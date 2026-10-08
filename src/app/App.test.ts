@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ActionEvent, PlayerCount, PlayerId, Screen, UICommand, VisionFrame, VisionStatus } from '../shared/types';
+import type { ActionEvent, MenuKey, PlayerCount, PlayerId, Screen, UICommand, VisionFrame, VisionStatus } from '../shared/types';
 import { DEFAULT_SETTINGS } from '../shared/constants';
 import { parseParams } from '../shared/params';
 import { AutoPilot, World } from '../game';
@@ -7,7 +7,8 @@ import { VisionCore } from '../vision/VisionCore';
 import { makeBody, SYN_YSCALE } from '../vision/synthetic';
 import { App } from './App';
 import { Session } from './Session';
-import { Countdown } from './rules';
+import { Countdown, ResumeGate } from './rules';
+import { FrameP90 } from './loop';
 
 // Exercise the real app transitions, countdown, vision core and worlds without creating
 // browser renderers, opening a webcam or starting a requestAnimationFrame loop.
@@ -40,7 +41,6 @@ function harness() {
     bootError: null as string | null,
     bootPending: false,
     calibPending: false,
-    calibWaitSince: 0,
     countdown: new Countdown(),
     countdownValue: 3,
     countdownHolding: false,
@@ -48,8 +48,18 @@ function harness() {
     queue: [] as ActionEvent[],
     log: [],
     report: vi.fn(),
+    toast: null as { text: string; t: number } | null,
+    stickyToast: null as string | null,
+    trackingPauseOff: false,
+    graphics: 'ok' as 'ok' | 'broken' | 'lost',
+    pauseReason: 'user' as 'user' | 'tracking-lost',
+    resume: new ResumeGate(),
+    gameoverAt: 0,
+    frameP90: new FrameP90(),
+    slowSince: null as number | null,
+    qualityLowered: false,
     booth: { idle: vi.fn() },
-    renderer: { setPlayerCount: vi.fn() },
+    renderer: { setPlayerCount: vi.fn(), setQuality: vi.fn() },
     keyboard: { setPlayerCount: vi.fn() },
     audio: {
       unlock: vi.fn(async () => {}),
@@ -65,6 +75,11 @@ function harness() {
     updatePresence(now: number): void;
     startCamera(fromBoot: boolean): Promise<void>;
     onCommand(command: UICommand): void;
+    onMenuKey(k: MenuKey): void;
+    onAction(e: ActionEvent): void;
+    onCameraLost(): void;
+    adaptQuality(now: number, deltaMs: number): void;
+    refreshStickyToast(): void;
   };
   return { app, vision };
 }
@@ -157,7 +172,7 @@ describe('App camera controls', () => {
     countdownFor(app, 2, 7.5);
     expect(app.goAt).not.toBeNull();
     expect(statuses(app)).toEqual(['running']);
-    expect((app as unknown as { toast: { text: string } | null }).toast?.text).toMatch(/arrow keys/);
+    expect((app as unknown as { toast: { text: string } | null }).toast?.text).toMatch(/arrows to move/);
   });
 
   it('keeps waiting (no fallback) while a visible player is still calibrating', () => {
@@ -215,5 +230,79 @@ describe('App camera controls', () => {
     expect(app.goAt).not.toBeNull();
     expect(statuses(app)).toEqual(['running', 'running']);
     await Promise.resolve();
+  });
+});
+
+describe('App review fixes', () => {
+  const now = () => performance.now() / 1000;
+
+  it('gameover PLAY / restart buttons respect the restart lockout', () => {
+    const { app } = harness();
+    app.beginCountdown([0], 0);
+    app.screen = 'gameover';
+    app.gameoverAt = now();
+    app.onCommand({ type: 'start', players: 1 });
+    app.onCommand({ type: 'restart' });
+    expect(app.screen).toBe('gameover');
+    app.gameoverAt = now() - 10;
+    app.onCommand({ type: 'restart' });
+    expect(app.screen).toBe('countdown');
+  });
+
+  it('a tracking-lost pause resumes on a key press and stops tracking pauses for the run', () => {
+    const { app } = harness();
+    app.beginCountdown([0], 0);
+    app.screen = 'paused';
+    app.pauseReason = 'tracking-lost';
+    app.onMenuKey('confirm');
+    expect(app.pauseReason).toBe('user');
+    expect(app.trackingPauseOff).toBe(true);
+    expect(app.resume.resumeIn).not.toBeNull();
+  });
+
+  it('camera lost mid-run pauses and switches to keyboard with a sticky message', () => {
+    const { app, vision } = harness();
+    app.beginCountdown([0], 0);
+    app.screen = 'playing';
+    vision.status = 'error';
+    vision.error = 'Camera disconnected';
+    app.onCameraLost();
+    expect(app.screen).toBe('paused');
+    expect(app.inputMode).toBe('keyboard');
+    expect(app.vision).toBeNull();
+    app.refreshStickyToast();
+    expect(app.toast?.text).toMatch(/keyboard/i);
+  });
+
+  it('the no-view keyboard hint stays until the first input', () => {
+    const { app } = harness();
+    app.screen = 'playing';
+    app.stickyToast = 'Playing with keyboard: arrows to move, space to jump';
+    app.toast = { text: 'SPEED UP!', t: performance.now() - 5000 };
+    app.refreshStickyToast();
+    expect(app.toast?.text).toMatch(/arrows to move/);
+    app.onAction({ source: 'keyboard', playerId: 0, action: { type: 'jump' }, t: 0 } as ActionEvent);
+    expect(app.stickyToast).toBeNull();
+  });
+
+  it('lowers graphics after 2 s of slow frames (1P), at once in 2P, and never raises them', () => {
+    const { app } = harness();
+    app.beginCountdown([0], 0);
+    app.screen = 'playing';
+    let t = 0;
+    for (let i = 0; i < 60; i++) app.adaptQuality((t += 0.03), 30);
+    expect(app.renderer.setQuality).not.toHaveBeenCalled();
+    for (let i = 0; i < 70; i++) app.adaptQuality((t += 0.03), 30);
+    expect(app.renderer.setQuality).toHaveBeenCalledWith('low');
+    expect(app.toast?.text).toMatch(/Lowered graphics/);
+    expect(app.settings.quality).toBe(DEFAULT_SETTINGS.quality);
+    for (let i = 0; i < 200; i++) app.adaptQuality((t += 0.016), 16);
+    expect(app.renderer.setQuality).toHaveBeenCalledTimes(1);
+
+    const two = harness().app;
+    two.beginCountdown([0, 1], 0);
+    two.screen = 'playing';
+    for (let i = 0; i < 60; i++) two.adaptQuality(i * 0.03, 30);
+    expect(two.renderer.setQuality).toHaveBeenCalledWith('low');
   });
 });

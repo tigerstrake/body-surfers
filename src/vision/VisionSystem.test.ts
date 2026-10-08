@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { VisionSystem } from './VisionSystem';
+import { CAMERA_DISCONNECTED_MESSAGE, MODEL_DOWNLOAD_FAILED_MESSAGE, VisionSystem } from './VisionSystem';
+import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
 import { VISION_CONFIG as C } from './config';
 import { makeBody } from './synthetic';
 
@@ -45,21 +46,45 @@ class FakeVideo extends EventTarget {
   }
 }
 
+class FakeTrack extends EventTarget {
+  readyState: 'live' | 'ended' = 'live';
+  label = 'Test camera';
+  constructor(private readonly deviceId: string) {
+    super();
+  }
+  stop = vi.fn(() => { this.readyState = 'ended'; });
+  getSettings = () => ({ deviceId: this.deviceId });
+  /** Simulate the camera being unplugged / taken by the OS. */
+  unplug(): void {
+    this.readyState = 'ended';
+    this.dispatchEvent(new Event('ended'));
+  }
+}
+
+class FakeMediaDevices extends EventTarget {
+  devices = [{ kind: 'videoinput', deviceId: 'cam-1', label: 'Test camera' }];
+  tracks: FakeTrack[] = [];
+  getUserMedia = vi.fn(async () => {
+    const track = new FakeTrack('cam-1');
+    this.tracks.push(track);
+    return { getTracks: () => [track], getVideoTracks: () => [track] };
+  });
+  enumerateDevices = vi.fn(async () => this.devices);
+}
+
 let video: FakeVideo;
 let vision: VisionSystem;
 let clock: number;
+let media: FakeMediaDevices;
 
 beforeEach(() => {
   vi.clearAllMocks();
   clock = 1000;
   vi.spyOn(performance, 'now').mockImplementation(() => clock);
   video = new FakeVideo();
-  const stream = {
-    getTracks: () => [{ stop: vi.fn() }],
-    getVideoTracks: () => [{ label: 'Test camera' }],
-  };
+  media = new FakeMediaDevices();
   vi.stubGlobal('document', { createElement: () => video, body: { appendChild: vi.fn() } });
-  vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: vi.fn(async () => stream) } });
+  vi.stubGlobal('navigator', { mediaDevices: media });
   mediapipe.detectForVideo.mockImplementation(() => ({ landmarks: [makeBody({ noise: 0 })] }));
   vision = new VisionSystem();
 });
@@ -135,16 +160,83 @@ describe('VisionSystem camera frame delivery', () => {
   it('surfaces repeated inference failures and recovers on a successful new frame', async () => {
     await start(true);
     mediapipe.detectForVideo.mockImplementation(() => { throw new Error('GPU unavailable'); });
-    for (let i = 1; i <= 30; i++) {
-      video.currentTime = i / 30;
-      expect(vision.update(1000 + i * 34)).toBeNull();
-    }
+    let i = 0;
+    const failFrames = async (count: number): Promise<void> => {
+      for (let k = 0; k < count; k++) {
+        i++;
+        video.currentTime = i / 30;
+        expect(vision.update(1000 + i * 34)).toBeNull();
+      }
+      await Promise.resolve();
+      await Promise.resolve();
+    };
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await failFrames(30);
+    // First: one rebuild on the CPU delegate, no error yet.
+    expect(vision.status).toBe('running');
+    expect(vision.delegate).toBe('CPU');
+    const create = vi.mocked(PoseLandmarker.createFromOptions);
+    expect(create).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({
+      baseOptions: expect.objectContaining({ delegate: 'CPU' }),
+    }));
+    const calls = create.mock.calls.length;
+    await failFrames(30);
+    expect(create.mock.calls.length).toBe(calls); // no second fallback
     expect(vision.status).toBe('error');
     expect(vision.error).toContain('GPU unavailable');
     mediapipe.detectForVideo.mockReturnValue({ landmarks: [makeBody({ noise: 0 })] });
-    video.currentTime = 2;
-    expect(vision.update(2500)?.people).toHaveLength(1);
+    video.currentTime = 5;
+    expect(vision.update(4000)?.people).toHaveLength(1);
     expect(vision.status).toBe('running');
     expect(vision.error).toBeNull();
+  });
+});
+
+describe('VisionSystem camera disconnects', () => {
+  it('reports a disconnect when the video track ends, and startCamera recovers', async () => {
+    await start(true);
+    expect(vision.status).toBe('running');
+    media.tracks[0].unplug();
+    expect(vision.status).toBe('error');
+    expect(vision.error).toBe(CAMERA_DISCONNECTED_MESSAGE);
+    video.currentTime = 1;
+    expect(vision.update(1100)).toBeNull();
+    expect(mediapipe.detectForVideo).not.toHaveBeenCalled();
+
+    await vision.startCamera();
+    expect(vision.status).toBe('running');
+    expect(vision.error).toBeNull();
+    expect(vision.update(1200)?.t).toBe(1200);
+    // The old track's listener is gone: a late 'ended' from it changes nothing.
+    media.tracks[0].unplug();
+    expect(vision.status).toBe('running');
+  });
+
+  it('reports a disconnect when the active device disappears from the device list', async () => {
+    await start(true);
+    media.devices = [];
+    media.dispatchEvent(new Event('devicechange'));
+    await vi.waitFor(() => expect(vision.status).toBe('error'));
+    expect(vision.error).toBe(CAMERA_DISCONNECTED_MESSAGE);
+    expect(media.tracks[0].stop).toHaveBeenCalled();
+  });
+
+  it('ignores devicechange when the active camera is still present', async () => {
+    await start(true);
+    media.devices = [...media.devices, { kind: 'videoinput', deviceId: 'cam-2', label: 'Other' }];
+    media.dispatchEvent(new Event('devicechange'));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(vision.status).toBe('running');
+  });
+});
+
+describe('VisionSystem model loading', () => {
+  it('shows a user-facing message when the model cannot be downloaded', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(FilesetResolver.forVisionTasks).mockRejectedValueOnce(new Error('404 public/models/x.task'));
+    await expect(vision.loadModel('lite')).rejects.toThrow(MODEL_DOWNLOAD_FAILED_MESSAGE);
+    expect(vision.status).toBe('error');
+    expect(vision.error).toBe(MODEL_DOWNLOAD_FAILED_MESSAGE);
   });
 });

@@ -11,7 +11,7 @@ import { ICONS } from '../icons';
 import { HINT_COPY } from '../copy';
 import { LEADERBOARD_ROWS_LOBBY } from '../config';
 import { LeaderboardPanel } from './LeaderboardPanel';
-import { type Emit, type ScreenView, kbd, makeLogo, picto } from './common';
+import { ControlsLine, type Emit, type ScreenView, kbd, makeLogo, picto } from './common';
 
 type Person = UIModel['lobby']['people'][number];
 type GuideState = 'off' | 'empty' | 'adjust' | 'good' | 'joined';
@@ -82,6 +82,7 @@ export class LobbyView implements ScreenView {
   private readonly join: Show;
   private readonly joinNum: NumText;
   private readonly board: LeaderboardPanel;
+  private readonly controls = new ControlsLine('bs-lobby__controls');
   private lastJoinNum = -1;
   private lastGuide: GuideState | null = null;
 
@@ -154,7 +155,7 @@ export class LobbyView implements ScreenView {
       'section',
       'bs-screen bs-lobby',
       makeLogo('bs-logo--lobby'),
-      h('div', 'bs-lobby__main', camWrap, doRow, actions),
+      h('div', 'bs-lobby__main', camWrap, doRow, this.controls.root, actions),
       this.board.root,
       legend,
     );
@@ -173,6 +174,7 @@ export class LobbyView implements ScreenView {
   update(m: UIModel): void {
     const keyboard = m.inputMode === 'keyboard';
     this.kbMode.set(keyboard);
+    this.controls.set(keyboard);
     const people = m.lobby.people;
     const mirror = m.settings.vision.mirror;
     this.multi.set(people.length > 1);
@@ -226,7 +228,8 @@ export class LobbyView implements ScreenView {
       this.title.set('PRESS PLAY');
       this.sub.set('or press 1 on your keyboard');
     } else if (people.length === 0) {
-      this.title.set('STEP INTO THE BOX');
+      // The camera pill already says "Step into the box"; don't repeat it here.
+      this.title.set('GET IN THE FRAME');
       this.sub.set('Stand about 2 m from the screen');
     } else if (anyJoined) {
       this.title.set("YOU'RE IN!");
@@ -235,7 +238,7 @@ export class LobbyView implements ScreenView {
       this.title.set('KEEP THEM UP!');
       this.sub.set('Hold until the ring is full');
     } else {
-      this.title.set('RAISE BOTH HANDS');
+      this.title.set('RAISE BOTH HANDS TO PLAY');
       this.sub.set('…or just click PLAY');
     }
 

@@ -3,8 +3,10 @@
 import type { UIModel } from '../../shared/types';
 import { button, CssNum, Flag, h, icon, Show, Text } from '../dom';
 import { ICONS } from '../icons';
-import { BOOT_TIPS, friendlyError } from '../copy';
-import { type Emit, type ScreenView, makeLogo } from './common';
+import { friendlyError } from '../copy';
+import { ControlsLine, type Emit, type ScreenView, makeLogo } from './common';
+
+const DEBUG_URL = typeof location !== 'undefined' && /[?&]debug=(1|true)\b/.test(location.search);
 
 export class BootView implements ScreenView {
   readonly root: HTMLElement;
@@ -19,11 +21,14 @@ export class BootView implements ScreenView {
   private readonly errTitle: Text;
   private readonly errBody: Text;
   private readonly errRaw: Text;
+  private readonly rawShow: Show;
+  private readonly tips: HTMLElement;
+  private readonly controls = new ControlsLine('bs-boot__controls');
   private lastError: string | null = null;
 
   constructor(emit: Emit) {
     const startBtn = button('bs-btn bs-btn--green bs-btn--xl bs-boot__start', '▶ START');
-    const startWrap = h('div', 'bs-boot__startwrap', startBtn, h('p', 'bs-boot__line', 'Uses your camera. Stand back ~2 m.'));
+    const startWrap = h('div', 'bs-boot__startwrap', startBtn, this.controls.root, h('p', 'bs-boot__line', 'Uses your camera. Stand back ~2 m.'));
 
     const barFill = h('span', 'bs-bar__fill');
     const barEl = h('div', 'bs-bar', barFill);
@@ -45,7 +50,7 @@ export class BootView implements ScreenView {
       emit({ type: 'keyboard-only' });
     });
     const tips = h('ul', 'bs-err__tips');
-    for (const t of BOOT_TIPS) tips.append(h('li', null, t));
+    this.tips = tips;
     const errEl = h(
       'div',
       'bs-err bs-sticker',
@@ -79,11 +84,15 @@ export class BootView implements ScreenView {
     this.errTitle = new Text(errTitle);
     this.errBody = new Text(errBody);
     this.errRaw = new Text(errRaw);
+    this.rawShow = new Show(errRaw);
   }
 
   update(m: UIModel): void {
     const b = m.boot;
     const hasError = b.error !== null && b.error !== '';
+    this.controls.set(m.inputMode === 'keyboard');
+    // The raw error is for developers only (?debug=1 or the debug overlay).
+    this.rawShow.set(DEBUG_URL || m.debug !== null);
     this.clickable.set(b.needsClick && !hasError);
     this.start.set(b.needsClick && !hasError);
     this.err.set(hasError);
@@ -94,6 +103,8 @@ export class BootView implements ScreenView {
       this.errTitle.set(f.title);
       this.errBody.set(f.body);
       this.errRaw.set(b.error ?? '');
+      this.tips.replaceChildren(...f.tips.map((t) => h('li', null, t)));
+      this.root.dataset.errorKind = f.kind;
     }
     const p = Math.max(0, Math.min(1, b.progress));
     const loading = p < 1;

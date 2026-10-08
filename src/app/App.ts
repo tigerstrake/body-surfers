@@ -19,7 +19,7 @@ import { APP } from './config';
 import { ErrorReporter, SafeAudio, SafeAutoPilot, SafeVision, SafeWorld } from './guards';
 import { LeaderboardStore, newEntryId } from './leaderboard';
 import { MimicFilter } from './mimic';
-import { FrameStats } from './loop';
+import { FrameP90, FrameStats } from './loop';
 import { funName } from './names';
 import {
   Countdown, JoinFlow, ResumeGate, bootProgress, calibrationOf, cameraErrorMessage, decideWinner, gameoverShouldExit,
@@ -55,6 +55,11 @@ declare global {
 }
 
 const NO_EVENTS: readonly never[] = [];
+export const KEYBOARD_HINT = 'Playing with keyboard: arrows to move, space to jump';
+export const CAMERA_LOST_HINT = 'Camera disconnected. Press Space to keep playing with the keyboard';
+export const LOW_QUALITY_TOAST = 'Lowered graphics for smoother play';
+export const NO_WEBGL2_ERROR = "Your browser can't run 3D graphics (WebGL2). Try Chrome with hardware acceleration on.";
+export const CONTEXT_LOST_ERROR = 'Graphics reset, click to reload';
 const BOOT_MESSAGES: Record<string, string> = {
   idle: 'Getting ready…',
   'loading-model': 'Loading body tracking…',
@@ -128,6 +133,18 @@ export class App {
   private debug: DebugStats | null = null;
   private debugAt = 0;
   private toast: { text: string; t: number } | null = null;
+  /** Re-raised every frame it would expire, until cleared (keyboard hint, camera lost). */
+  private stickyToast: string | null = null;
+  /** The player chose keyboard over a tracking-lost pause: no more tracking pauses this run. */
+  private trackingPauseOff = false;
+  /** Fatal graphics state: no WebGL2 / renderer init failed ('broken'), or the context was lost. */
+  private graphics: 'ok' | 'broken' | 'lost' = 'ok';
+  // adaptive quality (runtime override, never saved)
+  private readonly frameP90 = new FrameP90();
+  private slowSince: number | null = null;
+  private qualityLowered = false;
+  private rafId = 0;
+  private canvas: HTMLCanvasElement | null = null;
   private cameras: { deviceId: string; label: string }[] = [];
   private readonly stats = new FrameStats();
   /** Per-slot arm/torso mimic filters + their latest output. */
@@ -158,11 +175,19 @@ export class App {
     const canvas = document.getElementById('game-canvas') as HTMLCanvasElement | null;
     const root = document.getElementById('ui-root');
 
-    this.guard('renderer.init', () => {
-      if (canvas) this.renderer.init(canvas, { quality: this.settings.quality });
-      this.renderer.setPlayerCount(1);
-      this.renderer.resize(window.innerWidth, window.innerHeight);
-    });
+    this.canvas = canvas;
+    if (!hasWebGL2()) {
+      this.failGraphics('no webgl2', null);
+    } else {
+      try {
+        if (canvas) this.renderer.init(canvas, { quality: this.settings.quality });
+        this.renderer.setPlayerCount(1);
+        this.renderer.resize(window.innerWidth, window.innerHeight);
+      } catch (e) {
+        this.failGraphics('renderer.init', e);
+      }
+    }
+    canvas?.addEventListener('webglcontextlost', this.onContextLost);
     this.guard('ui.init', () => {
       if (root) this.ui.init(root);
       this.ui.onCommand((c) => this.guard('command', () => this.onCommand(c)));
@@ -176,31 +201,85 @@ export class App {
     this.audio.setMuted(this.settings.muted);
     this.audio.setVolumes(this.settings.musicVolume, this.settings.sfxVolume);
 
-    window.addEventListener('resize', () => this.guard('renderer.resize', () => this.renderer.resize(window.innerWidth, window.innerHeight)));
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden && (this.screen === 'playing' || (this.screen === 'countdown' && this.goAt !== null))) {
-        this.enterPaused('user');
-      }
-    });
+    window.addEventListener('resize', this.onResize);
+    document.addEventListener('visibilitychange', this.onVisibility);
     // Any user gesture unlocks audio (autostart / keyboard players never click the boot button).
-    const unlock = () => {
-      void this.audio.unlock().then(() => this.syncMusic());
-    };
-    window.addEventListener('pointerdown', unlock, { capture: true });
-    window.addEventListener('keydown', unlock, { capture: true });
+    window.addEventListener('pointerdown', this.onUnlock, { capture: true });
+    window.addEventListener('keydown', this.onUnlock, { capture: true });
 
-    if (this.inputMode === 'camera') this.initVision();
+    if (this.inputMode === 'camera' && this.graphics === 'ok') this.initVision();
     this.attract.reset();
 
-    window.__bodySurfers = { app: this, state: () => this.debugState(), log: this.log };
+    // Test / console handle: dev server or ?debug=1 only.
+    if (import.meta.env.DEV || this.params.debug) {
+      window.__bodySurfers = { app: this, state: () => this.debugState(), log: this.log };
+    }
 
     this.setScreen('boot', now);
-    if (this.params.autostart) {
+    if (this.params.autostart && this.graphics === 'ok') {
       this.clicked = true;
       if (this.vision) void this.startCamera(false);
       this.beginCountdown(this.params.players === 2 ? [0, 1] : [0], now);
     }
-    requestAnimationFrame(this.tick);
+    this.rafId = requestAnimationFrame(this.tick);
+  }
+
+  /** Stop the loop, remove every listener and release renderer, vision, booth, audio, UI and keyboard. */
+  dispose(): void {
+    this.running = false;
+    cancelAnimationFrame(this.rafId);
+    window.removeEventListener('resize', this.onResize);
+    document.removeEventListener('visibilitychange', this.onVisibility);
+    window.removeEventListener('pointerdown', this.onUnlock, { capture: true });
+    window.removeEventListener('keydown', this.onUnlock, { capture: true });
+    this.canvas?.removeEventListener('webglcontextlost', this.onContextLost);
+    this.guard('keyboard.dispose', () => this.keyboard.dispose());
+    this.guard('ui.dispose', () => this.ui.dispose());
+    this.guard('renderer.dispose', () => this.renderer.dispose());
+    if (this.vision) {
+      this.vision.dispose();
+      this.vision = null;
+    }
+    this.guard('booth.dispose', () => this.booth.dispose());
+    this.audio.dispose();
+    if (window.__bodySurfers?.app === this) delete window.__bodySurfers;
+  }
+
+  private readonly onResize = (): void => {
+    if (this.graphics !== 'ok') return;
+    this.guard('renderer.resize', () => this.renderer.resize(window.innerWidth, window.innerHeight));
+  };
+
+  private readonly onVisibility = (): void => {
+    if (document.hidden && (this.screen === 'playing' || (this.screen === 'countdown' && this.goAt !== null))) {
+      this.enterPaused('user');
+    }
+  };
+
+  private readonly onUnlock = (): void => {
+    void this.audio.unlock().then(() => this.syncMusic());
+  };
+
+  /** WebGL context lost (GPU reset / driver crash): stop the run and offer a reload. */
+  private readonly onContextLost = (e: Event): void => {
+    e.preventDefault();
+    if (this.graphics !== 'ok') return;
+    this.note('webgl-context-lost');
+    if (this.screen === 'playing' || this.screen === 'countdown') this.enterPaused('user');
+    this.graphics = 'lost';
+    this.bootError = CONTEXT_LOST_ERROR;
+    this.stickyToast = null;
+    this.toast = null;
+    this.goAt = null;
+    this.session.end();
+    this.setScreen('boot', performance.now() / 1000);
+  };
+
+  private failGraphics(where: string, e: unknown): void {
+    if (e !== null) this.report(where, e);
+    else console.warn('[app] WebGL2 is not available');
+    this.graphics = 'broken';
+    this.bootError = NO_WEBGL2_ERROR;
   }
 
   // ---------------------------------------------------------------------------
@@ -278,7 +357,8 @@ export class App {
       void this.refreshCameras();
       if (fromBoot && this.screen === 'boot') this.enterLobby(performance.now() / 1000);
     } catch (e) {
-      this.report('vision.startCamera', e);
+      // Expected (permission denied / no camera): the boot card explains it, so not an app error.
+      console.warn('[app] camera unavailable:', e);
       if (this.vision === v) this.showCameraError(cameraErrorMessage(e, v.error));
     } finally {
       this.bootPending = false;
@@ -326,12 +406,17 @@ export class App {
       this.note(`pose:p${e.playerId}:${a.type === 'lane' ? `lane${a.lane}` : a.type === 'move' ? `move${a.dir}` : a.type}`);
     }
     if (e.source === 'keyboard') this.lastActivity = performance.now() / 1000;
+    if (this.stickyToast === KEYBOARD_HINT && (this.screen === 'playing' || this.goAt !== null)) this.stickyToast = null;
     if (this.queue.length < 64) this.queue.push(e);
   }
 
   private onMenuKey(k: MenuKey): void {
     const now = performance.now() / 1000;
     this.lastActivity = now;
+    if (this.graphics !== 'ok') {
+      if (this.graphics === 'lost' && k === 'confirm') location.reload();
+      return;
+    }
     switch (k) {
       case 'mute':
         this.changeSettings({ muted: !this.settings.muted });
@@ -372,11 +457,11 @@ export class App {
         break;
       case 'paused':
         if (k === 'back') this.enterLobby(now);
-        else if ((k === 'pause' || k === 'confirm') && this.pauseReason === 'user') this.resume.trigger();
+        else if (k === 'pause' || k === 'confirm') this.resumeByUser();
         break;
       case 'gameover':
         if (k === 'back') this.enterLobby(now);
-        else if (restartLockoutLeft(now - this.gameoverAt) === null) {
+        else if (this.restartUnlocked(now)) {
           if (k === 'confirm') this.restart(now);
           else if (k === 'one-player') this.beginCountdown([0], now);
           else if (k === 'two-player') this.beginCountdown([0, 1], now);
@@ -388,6 +473,11 @@ export class App {
   private onCommand(c: UICommand): void {
     const now = performance.now() / 1000;
     this.lastActivity = now;
+    if (this.graphics !== 'ok') {
+      // Graphics are gone: the boot card's buttons (TRY AGAIN / keyboard) reload the page.
+      if (this.graphics === 'lost' && (c.type === 'boot-click' || c.type === 'keyboard-only')) location.reload();
+      if (c.type !== 'fullscreen' && c.type !== 'settings-open' && c.type !== 'settings-change') return;
+    }
     switch (c.type) {
       case 'boot-click':
         this.audio.playUi('click');
@@ -418,14 +508,14 @@ export class App {
           this.startFromLobby(c.players, now);
           if (fromBoot && this.vision && this.vision.status !== 'running') void this.startCamera(false);
         }
-        else if (this.screen === 'gameover') this.beginCountdown(c.players === 2 ? [0, 1] : [0], now);
+        else if (this.screen === 'gameover' && this.restartUnlocked(now)) this.beginCountdown(c.players === 2 ? [0, 1] : [0], now);
         break;
       case 'pause-toggle':
         if (this.screen === 'playing') this.enterPaused('user');
-        else if (this.screen === 'paused' && this.pauseReason === 'user') this.resume.trigger();
+        else if (this.screen === 'paused') this.resumeByUser();
         break;
       case 'restart':
-        if (this.screen === 'gameover' || this.screen === 'paused') this.restart(now);
+        if (this.screen === 'paused' || (this.screen === 'gameover' && this.restartUnlocked(now))) this.restart(now);
         break;
       case 'to-lobby':
         this.enterLobby(now);
@@ -473,6 +563,32 @@ export class App {
     }
   }
 
+  /** Gameover restarts (keys, buttons, hands) are ignored during the lockout. */
+  private restartUnlocked(now: number): boolean {
+    return restartLockoutLeft(now - this.gameoverAt) === null;
+  }
+
+  /** Keyboard / button resume. A tracking-lost pause becomes a keyboard run (no more tracking pauses). */
+  private resumeByUser(): void {
+    if (this.pauseReason === 'tracking-lost') {
+      this.pauseReason = 'user';
+      this.trackingPauseOff = true;
+      this.note('resume-keyboard');
+    }
+    this.resume.trigger();
+  }
+
+  /** The camera died mid-run (track ended / unplugged): pause and carry on with the keyboard. */
+  private onCameraLost(): void {
+    const msg = this.vision?.error ?? 'Camera disconnected';
+    this.note(`camera-lost:${msg}`);
+    this.useKeyboardOnly();
+    if (this.screen !== 'paused') this.enterPaused('user');
+    else this.pauseReason = 'user';
+    this.stickyToast = CAMERA_LOST_HINT;
+    this.toast = null;
+  }
+
   private toggleFullscreen(): void {
     try {
       if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
@@ -491,6 +607,11 @@ export class App {
     this.note(`screen:${s}`);
     this.screenAt = now;
     if (s === 'boot' || s === 'lobby') this.booth.idle(now, true);
+    if (s !== 'playing' && s !== 'paused' && s !== 'countdown') this.stickyToast = null;
+    if (s === 'playing') {
+      this.frameP90.reset();
+      this.slowSince = null;
+    }
     this.syncMusic();
   }
 
@@ -536,6 +657,8 @@ export class App {
     const n = (slots.length >= 2 ? 2 : 1) as PlayerCount;
     this.runTutorial = this.settings.tutorial;
     this.noViewSince = null;
+    this.trackingPauseOff = false;
+    this.stickyToast = null;
     this.session.begin(n, this.params.seed ?? randomSeed(), this.runTutorial, this.params.autopilot);
     const v = this.vision;
     if (v) {
@@ -599,6 +722,7 @@ export class App {
     this.applyLanes();
     this.queue.length = 0;
     this.audio.playUi('resume');
+    if (this.stickyToast === CAMERA_LOST_HINT) this.stickyToast = KEYBOARD_HINT;
     this.setScreen('playing', now);
   }
 
@@ -676,6 +800,7 @@ export class App {
     const dt = Math.min(APP.maxFrameDt, dtRaw);
     this.stats.tick(dtRaw);
     void tMs;
+    this.guard('quality', () => this.adaptQuality(t0 / 1000, dtRaw * 1000));
     try {
       this.frameUpdate(t0 / 1000, dt);
     } catch (e) {
@@ -683,6 +808,32 @@ export class App {
     }
     this.stats.work(performance.now() - t0);
   };
+
+  /**
+   * Adaptive quality: while playing, a rolling p90 of rAF deltas over APP.slowFrameMs for
+   * APP.slowForS (at once in 2P) drops the renderer to 'low'. Runtime only (the saved setting
+   * is untouched) and never stepped back up automatically.
+   */
+  private adaptQuality(now: number, deltaMs: number): void {
+    if (this.qualityLowered || this.graphics !== 'ok' || this.settings.quality === 'low') return;
+    if (this.screen !== 'playing') {
+      this.slowSince = null;
+      return;
+    }
+    if (deltaMs <= 0 || deltaMs > APP.frameOutlierMs) return;
+    this.frameP90.push(deltaMs);
+    if (!this.frameP90.full || this.frameP90.value() <= APP.slowFrameMs) {
+      this.slowSince = null;
+      return;
+    }
+    this.slowSince ??= now;
+    if (this.session.count === 2 || now - this.slowSince >= APP.slowForS) {
+      this.qualityLowered = true;
+      this.note(`quality-low:p90=${Math.round(this.frameP90.value())}`);
+      this.renderer.setQuality('low');
+      this.raiseToast(LOW_QUALITY_TOAST);
+    }
+  }
 
   private frameUpdate(now: number, dt: number): void {
     // 1. Vision (fires onAction synchronously).
@@ -699,6 +850,12 @@ export class App {
       }
     }
     if (this.cameraTracked()) this.updatePresence(now);
+    if (
+      this.inputMode === 'camera' && this.vision?.status === 'error' &&
+      (this.screen === 'playing' || this.screen === 'paused' || (this.screen === 'countdown' && this.goAt !== null))
+    ) {
+      this.onCameraLost();
+    }
 
     // 2. Screen logic.
     const sessionEvents = this.screen !== 'boot' && this.screen !== 'lobby';
@@ -743,7 +900,8 @@ export class App {
         });
       }
     }
-    this.guard('renderer.render', () => this.renderer.render(views, dt));
+    if (this.graphics === 'ok') this.guard('renderer.render', () => this.renderer.render(views, dt));
+    this.refreshStickyToast();
     if (this.debugOn && now - this.debugAt >= APP.debugIntervalS) {
       this.debugAt = now;
       let drawCalls = 0;
@@ -834,7 +992,7 @@ export class App {
       // "GO!" flash: the run is already live.
       this.countdownValue = 0;
       this.updatePlaying(now, dt);
-      if (this.screen === 'countdown' && now - this.goAt >= APP.goFlashS) this.screen = 'playing';
+      if (this.screen === 'countdown' && now - this.goAt >= APP.goFlashS) this.setScreen('playing', now);
       return;
     }
     if (this.calibPending && !this.startCalibrationIfReady()) {
@@ -870,7 +1028,10 @@ export class App {
     if (step.go) {
       this.audio.playUi('go');
       this.note(fallback ? 'go-fallback' : 'go');
-      if (fallback) this.raiseToast('Nobody in view, use the arrow keys ← → ↑ ↓');
+      if (fallback) {
+        this.stickyToast = KEYBOARD_HINT;
+        this.raiseToast(KEYBOARD_HINT);
+      }
       s.start();
       this.applyLanes();
       this.queue.length = 0;
@@ -926,7 +1087,7 @@ export class App {
       if (now - s.allDeadAt >= APP.gameoverDelayS) this.enterGameover(now);
       return;
     }
-    if (camera && !this.params.autopilot) {
+    if (camera && !this.params.autopilot && !this.trackingPauseOff) {
       if (missingPlayers(s.players, s.count, now, APP.trackingLostS).length > 0) this.enterPaused('tracking-lost');
     }
   }
@@ -1022,6 +1183,14 @@ export class App {
       this.settingsStore.save(this.stored);
     }
     if (this.settings.tutorial) this.settings = { ...this.settings, tutorial: false };
+  }
+
+  /** Keep a sticky toast on screen: re-raise it when it is gone or about to fade. */
+  private refreshStickyToast(): void {
+    const text = this.stickyToast;
+    if (!text) return;
+    const t = performance.now();
+    if (!this.toast || t - this.toast.t >= APP.stickyToastS * 1000) this.toast = { text, t };
   }
 
   private raiseToast(text: string): void {
@@ -1167,5 +1336,13 @@ export class App {
 
   playUi(s: UISound): void {
     this.audio.playUi(s);
+  }
+}
+
+function hasWebGL2(): boolean {
+  try {
+    return !!document.createElement('canvas').getContext('webgl2');
+  } catch {
+    return false;
   }
 }

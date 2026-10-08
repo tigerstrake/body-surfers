@@ -7,6 +7,34 @@
 
 Working title: `GAME_TITLE` in `src/shared/constants.ts` (change it in one place).
 
+## Changes since the plan
+
+This document is the plan written before the build. The sections below are kept as written,
+except that the numbers in §4 now match `src/game/config.ts`. What differs in the shipped game:
+
+- **Speed:** 13 → 27 m/s on the eased curve (tau 90 s), plus an endless linear ramp of
+  +0.05 m/s per second, capped at 48 m/s. The plan had 11 → 24 m/s with no ramp. Past
+  27 m/s a `speedUp` event fires every further 3 m/s.
+- **Power-ups:** 8 instead of 4. Added `jetpack` (7 s, fly 6 m up on a coin trail), `slowmo`
+  (8 s, world at 60% speed), `star` (8 s, invincible, smashes obstacles, new `smash` event)
+  and `coinRain` (10 s, dense coin lines). Jetpack and coin-rain coins are laid by `World`,
+  not the generator, so both 2P tracks stay identical.
+- **Harder tuning:** tighter row gaps (1.6 → 1.05 s), earlier pattern unlocks, power-ups
+  every 200–320 m. See §4.
+- **Copy my moves (`Settings.mimic`, default on):** the runner's arms and torso lean mirror
+  the player's pose in camera mode (`MimicPose` in `RenderView`).
+- **Tutorial once per browser:** after a run passes the tutorial section, a localStorage flag
+  switches the tutorial off; turning it on in Settings clears the flag (`src/app/tutorial.ts`).
+  Tutorial crashes are non-fatal (stumble + 1.2 s invulnerability).
+- **Countdown fallback:** in camera mode, if nobody is in view for 8 s the run starts anyway
+  and the keyboard steers (`APP.noViewFallbackS`).
+- **Collisions** are swept, so nothing is skipped at high speed.
+- **Hall of Fame** (`hall.html`) is built: leaderboard wall, now-playing panel, result
+  celebrations, `?demo=1` and `?tv=1` modes.
+- **Deployed** at https://body-surfers-steel.vercel.app.
+- **Tests:** 238 Vitest unit tests and 12 Playwright end-to-end scenarios, plus a synthetic
+  webcam person (`tools/fakecam`) for the vision path.
+
 ---
 
 ## 0. Decisions (locked with the user)
@@ -114,11 +142,14 @@ Module-specific tunables go in `src/<module>/config.ts`.
 All numbers are starting values — tune with tests, the AutoPilot soak and playtests.
 
 ### 4.1 Speed & difficulty
-- `speed(t) = 11 + (24 - 11) * (1 - exp(-t / 110))` m/s (16.5 @ 60 s, 19.6 @ 120 s, 21.5 @ 180 s).
-  Runs at camera-play pace should last 1–3 minutes (fatigue + booth throughput).
-- `speedLevel = (speed - 11) / (24 - 11)`. Emit `speedUp` at levels 0.25 / 0.5 / 0.75 (level 1/2/3).
-- During the tutorial the speed stays at 11.
-- Obstacle row spacing (time between decision points): `gap = lerp(1.7, 0.95, speedLevel)` s,
+- `speed(t) = min(48, 13 + (27 - 13) * (1 - exp(-t / 90)) + 0.05 * t)` m/s
+  (22.8 @ 60 s, 29.3 @ 120 s, 34.1 @ 180 s, 41.5 @ 300 s, cap 48 at ~423 s). `t` is
+  difficulty time, which starts after the tutorial.
+  (Original plan: `11 + (24 - 11) * (1 - exp(-t / 110))`, no ramp, aiming at 1–3 minute runs.)
+- `speedLevel = clamp((speed - 13) / (27 - 13), 0, 1)`. Emit `speedUp` at levels 0.25 / 0.5 / 0.75
+  (level 1/2/3), then once per further 3 m/s above 27 until the cap.
+- During the tutorial the speed stays at 13.
+- Obstacle row spacing (time between decision points): `gap = lerp(1.6, 1.05, speedLevel)` s,
   spacing = `max(14, speed * gap)` m, measured from the previous row's **far end** (trains are long).
 
 ### 4.2 Runner physics (fixed step `SIM_DT = 1/120`)
@@ -127,7 +158,7 @@ All numbers are starting values — tune with tests, the AutoPilot soak and play
 - Roll: 0.65 s; collision height `PLAYER_ROLL_HEIGHT`. Duck while airborne → `vy = -22` (fast fall) and roll on landing.
 - Lane change: 0.17 s per lane (eased lateral motion; `x` is continuous, collisions use real `x`).
 - Input buffering: jump pressed ≤ 0.15 s before landing executes on landing; coyote time 0.1 s after running off a roof.
-- Forgiveness: shrink lateral overlap by 0.15 m and obstacle near faces by 0.2 m for collision.
+- Forgiveness: shrink lateral overlap by 0.15 m and obstacle near faces by 0.1 m for collision.
 
 ### 4.3 Obstacles & collision
 | Kind | Pass by | Crash when (z & lateral overlap) |
@@ -145,7 +176,7 @@ All numbers are starting values — tune with tests, the AutoPilot soak and play
   feet + 0.45, emit **one** `blocked` event, keep the lane, set `player.blockedDir`, and **wait**:
   as soon as the path clears, perform the pending move automatically. Never fatal, never
   repeated stumbles from one held position. Keyboard `move` sets `desiredLane = clamp(lane+dir)`.
-- **Moving trains:** `s` decreases by `speed·dt`; unlock at `speedLevel ≥ 0.25`; 7–10 m/s;
+- **Moving trains:** `s` decreases by `speed·dt`; unlock at `speedLevel ≥ 0.15`; 5–8 m/s;
   always leave another lane open; emit `trainHorn` once when time-to-reach-runner < 3.5 s.
 - Obstacle ids are unique per World instance **across resets** (never reset the counter).
 
@@ -155,22 +186,25 @@ Pattern library (weighted; some unlock with difficulty):
 2. `full_low` — low barriers in all lanes (must jump).
 3. `single_high` / `full_high` — overhead bars (must roll).
 4. `train_single` — 1–3-car train in one lane; `train_double` — two lanes, free lane gets coins.
-5. `ramp_train` — ramp + 2–3-car train; coins on the roof (unlock `speedLevel ≥ 0.1`).
-6. `train_wall_ramp` — trains in all 3 lanes, one has a ramp (must climb) (unlock 0.2).
+5. `ramp_train` — ramp + 2–3-car train; coins on the roof (unlock `speedLevel ≥ 0.06`).
+6. `train_wall_ramp` — trains in all 3 lanes, one has a ramp (must climb) (unlock 0.12).
 7. `mixed` — train + barrier + free lane combos.
-8. `moving_train` — see above (unlock 0.25).
-9. `zigzag` — staggered trains forcing 2 consecutive lane changes (unlock 0.4).
+8. `moving_train` — see above (unlock 0.15).
+9. `zigzag` — staggered trains forcing 2 consecutive lane changes (unlock 0.3).
+
+(`full_high` unlocks at 0.03. At level 1, hard patterns weigh 2.2× and singles 0.65×.)
 
 **Solvability invariants** (unit-tested over 10k generated rows across seeds):
 - Every row has at least one lane passable by staying in it, or all its blocked lanes are uniformly jumpable/rollable.
 - A runner beside a long train always has a passable option in its lane until the train ends + reaction distance.
 - Never a low barrier and a high barrier in the same lane closer than (airtime + roll time) × speed + 4 m.
-- Rows that require lane changes leave ≥ 1.0 s at current speed to react, accounting for 0.17 s/lane.
+- Rows that require lane changes leave ≥ 1.3 s at current speed to react (+0.4 s per extra lane), accounting for 0.17 s/lane.
 
 **Coins:** lines of 5–12 at 2.4 m spacing in free lanes; arcs over low barriers following the
 jump parabola; on roofs at `TRAIN_HEIGHT + COIN_HEIGHT`; along ramps.
-**Power-ups:** one every 280–450 m (not in tutorial), in a free lane, weights magnet .35,
-multiplier .30, sneakers .25, hoverboard .10.
+**Power-ups:** first one 120–240 m after the tutorial (or start), then one every 200–320 m,
+in a free lane. Weights: magnet .18, multiplier .16, jetpack .14, sneakers .12, hoverboard .10,
+slowmo .10, star .10, coinRain .10.
 
 ### 4.5 Power-ups
 | Kind | Duration | Effect |
@@ -179,6 +213,10 @@ multiplier .30, sneakers .25, hoverboard .10.
 | `multiplier` | 15 s | score multiplier ×2 |
 | `sneakers` | 12 s | super jump (land on trains) |
 | `hoverboard` | 25 s or one crash | absorbs one crash → `hoverboardBreak`, 1.5 s invulnerability (`player.invulnerable`) |
+| `jetpack` | 7 s | fly at 6 m feet height above the trains along a sky coin trail; invulnerable during descent + 0.8 s after landing (added after the plan) |
+| `slowmo` | 8 s | world scrolls at 60% speed, 0.3 s ease in/out (added after the plan) |
+| `star` | 8 s | invincible; obstacles hit are smashed and removed (`smash` event); 0.8 s grace after (added after the plan) |
+| `coinRain` | 10 s | dense coin lines laid 110 m ahead at 2.4 m spacing (added after the plan) |
 
 Emit `powerUpWarning` once 2 s before expiry and `powerUpEnd` at expiry. Re-pickup refreshes duration.
 
@@ -192,7 +230,7 @@ Scripted rows (track positions from start): 55 m `full_low` → hint `jump`; 105
 → `duck`; 160 m train center + coin lines left/right → `switch`; 225 m trains left+center →
 `right`; 290 m trains right+center → `left`; random generation from 350 m.
 `snapshot.hint` = the action the runner still needs for the nearest unpassed tutorial row
-within 2.2 s, computed against the current lane (`null` if already safe).
+within 2.6 s, computed against the current lane (`null` if already safe).
 
 ### 4.8 Run lifecycle
 `reset(opts)` → status `ready` (runner idles at start; renderer shows an idle bounce) →
@@ -495,5 +533,5 @@ input/textarea/select/contentEditable; `preventDefault` on arrows/space.
 - Settings (`) → pick camera, check tuning; clear the leaderboard before judging starts.
 
 ## 15. Stretch backlog (after everything above works)
-Jetpack power-up, character skins, daily seed, QR code to download your crash selfie,
+~~Jetpack power-up~~ (shipped, see §4.5), character skins, daily seed, QR code to download your crash selfie,
 achievements, spectator-cam replay of the crash, haptic-free "boost" by clapping.

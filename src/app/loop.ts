@@ -60,3 +60,41 @@ export class FrameStats {
     if (ms >= 0) this.frameMs += (ms - this.frameMs) * 0.1;
   }
 }
+
+/** Rolling 90th percentile of frame deltas (ms) over the last `size` frames. */
+export class FrameP90 {
+  private readonly buf: Float64Array;
+  private readonly sorted: Float64Array;
+  private n = 0;
+  private i = 0;
+
+  constructor(readonly size = 60) {
+    this.buf = new Float64Array(size);
+    this.sorted = new Float64Array(size);
+  }
+
+  push(ms: number): void {
+    this.buf[this.i] = ms;
+    this.i = (this.i + 1) % this.size;
+    if (this.n < this.size) this.n++;
+  }
+
+  reset(): void {
+    this.n = 0;
+    this.i = 0;
+  }
+
+  /** True once the window holds `size` samples. */
+  get full(): boolean {
+    return this.n >= this.size;
+  }
+
+  /** p90 of the samples so far (0 when empty). */
+  value(): number {
+    if (this.n === 0) return 0;
+    const s = this.sorted.subarray(0, this.n);
+    s.set(this.buf.subarray(0, this.n));
+    s.sort();
+    return s[Math.min(this.n - 1, Math.floor(this.n * 0.9))];
+  }
+}

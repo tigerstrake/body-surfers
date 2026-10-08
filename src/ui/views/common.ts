@@ -3,6 +3,7 @@ import type { UICommand, UIModel } from '../../shared/types';
 import { GAME_TITLE } from '../../shared/constants';
 import { h, svg } from '../dom';
 import { PICTOS, type PictoKind } from '../icons';
+import { CONTROLS_CAMERA, CONTROLS_KEYBOARD } from '../copy';
 
 export type Emit = (c: UICommand) => void;
 
@@ -40,4 +41,26 @@ export function picto(kind: PictoKind, extra = ''): HTMLElement {
 /** Big chunky outlined display text. */
 export function display(tag: 'div' | 'h1' | 'h2' | 'span' | 'p', cls: string, text = ''): HTMLElement {
   return h(tag, `bs-display ${cls}`.trim(), text);
+}
+
+/** Compact one-line controls primer: "⬅➡ Step · ⬆ Jump · ⬇ Squat" (or "Arrows · Space" on keyboard). */
+export class ControlsLine {
+  readonly root: HTMLElement;
+  private keyboard: boolean | null = null;
+
+  constructor(extra = '') {
+    this.root = h('div', `bs-controls ${extra}`.trim());
+    this.root.setAttribute('aria-label', 'Controls');
+  }
+
+  set(keyboard: boolean): void {
+    if (keyboard === this.keyboard) return;
+    this.keyboard = keyboard;
+    const items = keyboard ? CONTROLS_KEYBOARD : CONTROLS_CAMERA;
+    this.root.replaceChildren();
+    items.forEach((it, i) => {
+      if (i > 0) this.root.append(h('span', 'bs-controls__dot', '·'));
+      this.root.append(h('span', 'bs-controls__pill', h('b', 'bs-controls__icon', it.icon), h('span', null, it.label)));
+    });
+  }
 }

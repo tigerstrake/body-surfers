@@ -115,7 +115,8 @@ export class PlayerAssigner {
       tr.lastSeen = t;
       tr.everFilled = true;
     }
-    r.extra = Math.max(0, cands.length - assigned);
+    // Only plausible people count as extras; low-confidence detections are noise.
+    r.extra = Math.max(0, valid.length - assigned);
     this.lastT = t;
     return r;
   }

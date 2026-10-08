@@ -114,6 +114,12 @@ export class SettingsPanel {
     this.clearAsk = new Show(askEl);
     this.clearConfirm = new Show(confirmEl);
 
+    // Gesture tuning is for tinkerers: tucked into a collapsed "Advanced" section.
+    const advanced = h('details', 'bs-set__adv');
+    const summary = h('summary', 'bs-set__section bs-set__advsum', 'Advanced: gesture tuning');
+    summary.addEventListener('keydown', (e) => e.stopPropagation());
+    advanced.append(summary, h('div', 'bs-set__advgrid', ...visionRows));
+
     const panel = h(
       'div',
       'bs-set__panel bs-sticker',
@@ -130,6 +136,10 @@ export class SettingsPanel {
           row('Mirror camera', this.mirror.btn),
           row('Show webcam in game', this.webcam.btn),
           row('Copy my moves', this.mimic.btn, "Runner's arms follow yours"),
+        ),
+        h(
+          'div',
+          'bs-set__col',
           h('h3', 'bs-set__section', 'Game'),
           row('Graphics quality', qualitySeg.el),
           row('Tutorial', this.tutorial.btn),
@@ -137,9 +147,9 @@ export class SettingsPanel {
           row('Music volume', sliderWrap(this.music)),
           row('Sound effects', sliderWrap(this.sfx)),
         ),
-        h('div', 'bs-set__col', h('h3', 'bs-set__section', 'Gesture tuning'), ...visionRows),
+        advanced,
       ),
-      h('footer', 'bs-set__foot', reset, askEl, confirmEl),
+      h('footer', 'bs-set__foot', reset, h('p', 'bs-set__privacy', 'Crash selfies stay in this browser only.'), askEl, confirmEl),
     );
     const backdrop = h('div', 'bs-set__backdrop');
     backdrop.addEventListener('click', () => emit({ type: 'settings-open', open: false }));

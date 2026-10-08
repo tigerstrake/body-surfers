@@ -12,6 +12,13 @@ import { captureSelfieFromVideo } from './selfie';
 
 type WasmFileset = Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>>;
 
+export const CAMERA_DISCONNECTED_MESSAGE =
+  'Camera disconnected. Plug it back in and press Retry, or play with the keyboard.';
+export const MODEL_DOWNLOAD_FAILED_MESSAGE =
+  "Couldn't download the body-tracking model. Check your connection and reload.";
+/** Consecutive detectForVideo failures before switching to CPU / reporting an error. */
+const MAX_CONSECUTIVE_FAILURES = 30;
+
 function errName(e: unknown): string {
   return e && typeof e === 'object' && 'name' in e ? String((e as { name: unknown }).name) : '';
 }
@@ -61,6 +68,14 @@ export class VisionSystem implements IVisionSystem {
   private lastTs = 0;
   private lastInferenceAt = 0;
   private consecutiveFailures = 0;
+  /** A runtime GPU→CPU landmarker swap was already attempted for the current model. */
+  private cpuFallbackTried = false;
+  /** A CPU landmarker is being created after repeated runtime failures; skip inference. */
+  private recovering = false;
+  /** Detaches the 'ended' listeners of the active stream's tracks. */
+  private detachTrackListeners: (() => void) | null = null;
+  private deviceChangeHooked = false;
+  private readonly onDeviceChange = (): void => void this.checkActiveDevice();
 
   // stats
   private inferenceMs = 0;
@@ -102,16 +117,7 @@ export class VisionSystem implements IVisionSystem {
     this.loading = true;
     try {
       if (!this.fileset) this.fileset = await FilesetResolver.forVisionTasks(assetUrl(ASSET_PATHS.mediapipeWasm));
-      const make = (delegate: 'GPU' | 'CPU') =>
-        PoseLandmarker.createFromOptions(this.fileset as WasmFileset, {
-          baseOptions: { modelAssetPath: assetUrl(ASSET_PATHS.poseModel(model)), delegate },
-          runningMode: 'VIDEO',
-          numPoses: this.numPoses(),
-          minPoseDetectionConfidence: C.minPoseDetectionConfidence,
-          minPosePresenceConfidence: C.minPosePresenceConfidence,
-          minTrackingConfidence: C.minTrackingConfidence,
-          outputSegmentationMasks: false,
-        });
+      const make = (delegate: 'GPU' | 'CPU') => this.createLandmarker(model, delegate);
       let lm: PoseLandmarker;
       let delegate: 'GPU' | 'CPU' = 'GPU';
       try {
@@ -138,14 +144,126 @@ export class VisionSystem implements IVisionSystem {
         }
       }
       this.consecutiveFailures = 0;
+      this.cpuFallbackTried = false;
+      this.recovering = false;
       this._status = this.cameraReady ? 'running' : 'model-ready';
     } catch (e) {
       if (token !== this.loadToken) return;
       this.loading = false;
-      throw this.fail(
-        `Could not load the pose model (${model}). Check that public/${ASSET_PATHS.poseModel(model)} and the MediaPipe WASM files are present. (${errMsg(e)})`,
+      this.recovering = false;
+      // Developer detail goes to the console; the player sees a plain-language message.
+      console.error(
+        `[vision] could not load pose model '${model}' (${ASSET_PATHS.poseModel(model)}, WASM ${ASSET_PATHS.mediapipeWasm}):`,
+        errMsg(e),
       );
+      throw this.fail(MODEL_DOWNLOAD_FAILED_MESSAGE);
     }
+  }
+
+  private createLandmarker(model: PoseModel, delegate: 'GPU' | 'CPU'): Promise<PoseLandmarker> {
+    return PoseLandmarker.createFromOptions(this.fileset as WasmFileset, {
+      baseOptions: { modelAssetPath: assetUrl(ASSET_PATHS.poseModel(model)), delegate },
+      runningMode: 'VIDEO',
+      numPoses: this.numPoses(),
+      minPoseDetectionConfidence: C.minPoseDetectionConfidence,
+      minPosePresenceConfidence: C.minPosePresenceConfidence,
+      minTrackingConfidence: C.minTrackingConfidence,
+      outputSegmentationMasks: false,
+    });
+  }
+
+  /** Runtime failures on the GPU delegate: rebuild the landmarker on CPU (once per model load). */
+  private async fallbackToCpu(lastErr: unknown): Promise<void> {
+    const model = this.model;
+    const token = this.loadToken;
+    this.cpuFallbackTried = true;
+    if (!model || !this.fileset) {
+      this.trackingFailed(lastErr);
+      return;
+    }
+    console.warn('[vision] pose tracking keeps failing on the GPU, switching to CPU:', errMsg(lastErr));
+    this.recovering = true;
+    let lm: PoseLandmarker;
+    try {
+      lm = await this.createLandmarker(model, 'CPU');
+    } catch (e) {
+      if (token !== this.loadToken || this.disposed) return;
+      this.recovering = false;
+      this.trackingFailed(e);
+      return;
+    }
+    if (token !== this.loadToken || this.disposed) {
+      // A newer loadModel (or dispose) superseded this swap.
+      lm.close();
+      return;
+    }
+    const old = this.landmarker;
+    this.landmarker = lm;
+    this.delegate = 'CPU';
+    this.consecutiveFailures = 0;
+    this.recovering = false;
+    if (old && old !== lm) {
+      try {
+        old.close();
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  private trackingFailed(e: unknown): void {
+    this._status = 'error';
+    this._error = `Pose tracking stopped working (${errMsg(e)}). Reload the page or switch the model in Settings.`;
+  }
+
+  /** The active camera went away (unplugged, taken by another app, permission revoked). */
+  private cameraDisconnected(stream: MediaStream): void {
+    if (this.stream !== stream || this.disposed) return;
+    console.warn('[vision] camera disconnected');
+    this.cameraToken++; // cancel any in-flight start that still references this stream
+    if (this.video && this.rvfcId && this.rvfcSupported) this.video.cancelVideoFrameCallback(this.rvfcId);
+    this.rvfcId = 0;
+    this.stopStream();
+    if (this.video) this.video.srcObject = null;
+    this.fail(CAMERA_DISCONNECTED_MESSAGE);
+  }
+
+  private watchStream(stream: MediaStream): void {
+    const tracks = stream.getVideoTracks();
+    const onEnded = (): void => this.cameraDisconnected(stream);
+    for (const t of tracks) t.addEventListener?.('ended', onEnded);
+    this.detachTrackListeners = () => {
+      for (const t of tracks) t.removeEventListener?.('ended', onEnded);
+    };
+    const md = navigator.mediaDevices;
+    if (!this.deviceChangeHooked && typeof md?.addEventListener === 'function') {
+      md.addEventListener('devicechange', this.onDeviceChange);
+      this.deviceChangeHooked = true;
+    }
+  }
+
+  /** On 'devicechange': if the active camera is no longer listed (or its track died), disconnect. */
+  private async checkActiveDevice(): Promise<void> {
+    const stream = this.stream;
+    if (!stream || this.disposed) return;
+    const track = stream.getVideoTracks()[0];
+    if (!track || track.readyState === 'ended') {
+      this.cameraDisconnected(stream);
+      return;
+    }
+    const id = typeof track.getSettings === 'function' ? track.getSettings().deviceId : undefined;
+    if (!id) return;
+    let devices: MediaDeviceInfo[];
+    try {
+      devices = await navigator.mediaDevices.enumerateDevices();
+    } catch {
+      return;
+    }
+    if (this.stream !== stream) return;
+    // Some browsers hide device ids until permission is granted; don't treat that as removal.
+    const cams = devices.filter((d) => d.kind === 'videoinput');
+    if (cams.length > 0 && cams.every((d) => !d.deviceId)) return;
+    if (!cams.some((d) => d.deviceId === id)) this.cameraDisconnected(stream);
   }
 
   async startCamera(deviceId?: string | null): Promise<void> {
@@ -186,6 +304,7 @@ export class VisionSystem implements IVisionSystem {
     }
     this.stopStream();
     this.stream = stream;
+    this.watchStream(stream);
     const video = this.ensureVideo();
     video.srcObject = stream;
     try {
@@ -342,7 +461,7 @@ export class VisionSystem implements IVisionSystem {
     try {
       const video = this.video;
       const lm = this.landmarker;
-      if (!video || !lm || !this.cameraReady || this.disposed) return this.lastFrame;
+      if (!video || !lm || !this.cameraReady || this.disposed || this.recovering) return this.lastFrame;
       if (video.readyState < 2 || video.videoWidth === 0) return this.lastFrame;
       if (!this.hasNewFrame(video, now)) return this.lastFrame;
       if (this.inferenceMs > C.slowInferenceMs && now - this.lastInferenceAt < C.slowInferenceMinIntervalMs) {
@@ -360,9 +479,9 @@ export class VisionSystem implements IVisionSystem {
       try {
         result = lm.detectForVideo(video, ts);
       } catch (e) {
-        if (++this.consecutiveFailures >= 30) {
-          this._status = 'error';
-          this._error = `Pose tracking stopped working (${errMsg(e)}). Reload the page or switch the model in Settings.`;
+        if (++this.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          if (this.delegate === 'GPU' && !this.cpuFallbackTried) void this.fallbackToCpu(e);
+          else this.trackingFailed(e);
         }
         return this.lastFrame;
       }
@@ -429,6 +548,8 @@ export class VisionSystem implements IVisionSystem {
   }
 
   private stopStream(): void {
+    this.detachTrackListeners?.();
+    this.detachTrackListeners = null;
     if (this.stream) this.stream.getTracks().forEach((t) => t.stop());
     this.stream = null;
     this.cameraReady = false;
@@ -440,6 +561,10 @@ export class VisionSystem implements IVisionSystem {
     this.cameraToken++;
     if (this.video && this.rvfcId && this.rvfcSupported) this.video.cancelVideoFrameCallback(this.rvfcId);
     this.stopStream();
+    if (this.deviceChangeHooked) {
+      navigator.mediaDevices?.removeEventListener?.('devicechange', this.onDeviceChange);
+      this.deviceChangeHooked = false;
+    }
     if (this.video) {
       this.video.srcObject = null;
       this.video.remove();

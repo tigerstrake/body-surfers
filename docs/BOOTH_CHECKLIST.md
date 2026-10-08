@@ -5,7 +5,7 @@
 - [ ] `npm install && npm run build` succeeds. `bash scripts/check.sh` passes with the dev server running.
 - [ ] Test `npx vite preview` (production build) with the real camera, 1P and 2P.
 - [ ] Turn wifi off and confirm the game still loads and tracks (everything is self-hosted).
-- [ ] Record a backup gameplay video and the README GIF.
+- [ ] Optional: record a backup gameplay video.
 - [ ] Charge the laptop. Pack the charger, an extension cord, an HDMI/USB-C adapter for the
       second screen, and painter's tape.
 - [ ] Optional: iPhone with Continuity Camera set up (same Apple ID, Wi-Fi and Bluetooth on).
@@ -43,7 +43,8 @@
 - Your body is the controller; no install, no hardware beyond a webcam.
 - Calibrates to each player during the countdown.
 - 2-player split-screen race on the identical course.
-- Crash selfies stay on this laptop only (localStorage); nothing is uploaded.
+- Pose tracking runs in the browser and video never leaves the laptop. Crash selfies stay in
+  localStorage only. (MediaPipe's library does send anonymous usage pings to Google.)
 - All art, music and sound are procedural. Runs offline.
 - Built contract-first with parallel Claude Code agents.
 

@@ -85,6 +85,10 @@ export class GestureDetector {
   private calibY: number[] = [];
   private calibS: number[] = [];
   private calibN = 0;
+  /** Accepted calibration frames seen so far (for stride decimation). */
+  private calibSeen = 0;
+  /** Keep every `calibStride`-th accepted frame; doubles whenever the buffer fills. */
+  private calibStride = 1;
 
   private pendingLane: Lane = 0;
   private pendingSince = -1;
@@ -111,6 +115,8 @@ export class GestureDetector {
     this.calibStartT = t;
     this.calibAccumMs = 0;
     this.calibN = 0;
+    this.calibSeen = 0;
+    this.calibStride = 1;
   }
 
   resetCalibration(): void {
@@ -118,8 +124,35 @@ export class GestureDetector {
     this.calibrationProgress = 0;
     this.calibStartT = -1;
     this.calibN = 0;
+    this.calibSeen = 0;
+    this.calibStride = 1;
     this.laneCenterX = 0.5;
     this.lastGesture = null;
+  }
+
+  /**
+   * Deterministic, time-uniform calibration sampling: keep every `calibStride`-th accepted
+   * frame. When the buffer is full, drop every other kept sample and double the stride, so the
+   * kept set always spans the whole calibration evenly (no bias toward recent frames).
+   */
+  private pushCalibSample(): void {
+    const seen = this.calibSeen++;
+    if (seen % this.calibStride !== 0) return;
+    if (this.calibN >= C.calibMaxSamples) {
+      let w = 0;
+      for (let r = 0; r < this.calibN; r += 2, w++) {
+        this.calibX[w] = this.calibX[r];
+        this.calibY[w] = this.calibY[r];
+        this.calibS[w] = this.calibS[r];
+      }
+      this.calibN = w;
+      this.calibStride *= 2;
+      if (seen % this.calibStride !== 0) return;
+    }
+    const i = this.calibN++;
+    this.calibX[i] = this.centerX;
+    this.calibY[i] = this.anchorY;
+    this.calibS[i] = this.perspScale;
   }
 
   /** New identity in this slot (or long gap): drop kinematic history, keep calibration. */
@@ -298,10 +331,7 @@ export class GestureDetector {
       else ok = handsDown && this.confidence > C.calibMinConfidence && this.calmSpeed < C.calibMaxSpeed;
       if (ok) {
         this.calibAccumMs += dtMs;
-        const i = this.calibN < C.calibMaxSamples ? this.calibN++ : Math.floor(Math.random() * C.calibMaxSamples);
-        this.calibX[i] = this.centerX;
-        this.calibY[i] = this.anchorY;
-        this.calibS[i] = this.perspScale;
+        this.pushCalibSample();
       }
       this.calibrationProgress = Math.min(1, this.calibAccumMs / C.calibDurationMs);
       if (this.calibAccumMs >= C.calibDurationMs) {

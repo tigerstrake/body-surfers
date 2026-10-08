@@ -64,8 +64,9 @@ class ResultCard {
     this.root = h(
       'div',
       'bs-result',
-      h('div', 'bs-result__pic', polaroid, crown, rankEl),
-      h('div', 'bs-result__info', h('div', 'bs-result__label', 'SCORE'), scoreEl, stats, nameWrap, staticName),
+      h('div', 'bs-result__pic', polaroid, crown),
+      // Rank badge sits in the info column so it can never cover the subtitle or the selfie.
+      h('div', 'bs-result__info', rankEl, h('div', 'bs-result__label', 'SCORE'), scoreEl, stats, nameWrap, staticName),
     );
     this.show = new Show(this.root);
     this.img = new ImgSrc(img);
@@ -162,6 +163,8 @@ export class GameOverView implements ScreenView {
   private readonly cards: ResultCard[];
   private readonly title: Text;
   private readonly sub: Text;
+  private readonly subShow: Show;
+  private readonly boardShow: Show;
   private readonly playersAttr: Attr;
   private readonly board: LeaderboardPanel;
   private readonly ring: CssNum;
@@ -203,6 +206,8 @@ export class GameOverView implements ScreenView {
     );
     this.title = new Text(title);
     this.sub = new Text(sub);
+    this.subShow = new Show(sub);
+    this.boardShow = new Show(this.board.root);
     this.playersAttr = new Attr(this.root, 'data-players');
     this.ring = new CssNum(restart, '--p', 0.01);
     this.locked = new Flag(restart, 'is-locked');
@@ -234,8 +239,14 @@ export class GameOverView implements ScreenView {
     } else {
       this.title.set('CRASHED!');
       const r = results[0];
-      this.sub.set(r && r.rank === 1 ? 'You are the top surfer!' : r && r.rank !== null ? 'You made the board!' : 'So close! Try again?');
+      // #1: the NEW RECORD! badge says it all; no extra "you're the best" subtitle.
+      this.sub.set(r && r.rank !== null && r.rank > 1 ? 'You made the board!' : r && r.rank === null ? 'So close! Try again?' : '');
     }
+    this.subShow.set(this.sub.el.textContent !== '');
+    // A board holding only this run's entry just repeats the result card.
+    let others = 0;
+    for (const e of m.leaderboard) if (!results.some((r) => r.entryId === e.id)) others++;
+    this.boardShow.set(others > 0);
     for (let i = 0; i < 2; i++) {
       const r = results[i];
       this.cards[i].show.set(r !== undefined);

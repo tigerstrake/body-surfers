@@ -39,6 +39,14 @@ export const APP = {
   staleFrameS: 1.0,
   /** Same toast text raised again within this window keeps the original timestamp. */
   toastRepeatS: 1.0,
+  /** A sticky toast (keyboard hint, camera lost) is re-raised once it is this old (UI shows a toast 1.5 s). */
+  stickyToastS: 1.2,
+  /** Adaptive quality: rolling p90 of rAF deltas above this (ms) while playing... */
+  slowFrameMs: 22,
+  /** ...for this long (1P) lowers graphics for the rest of the page session. 2P lowers at once. */
+  slowForS: 2,
+  /** rAF deltas above this (ms) are ignored (tab switch, debugger, GC hitch). */
+  frameOutlierMs: 250,
   /** Debug overlay numbers refresh interval. */
   debugIntervalS: 0.25,
   /** Booth broadcast: 'state' interval while a run is on screen, 'idle' interval otherwise. */

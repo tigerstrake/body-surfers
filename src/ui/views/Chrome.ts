@@ -10,6 +10,8 @@ export class Toast {
   private readonly show: Show;
   private readonly text: Text;
   private lastT = Number.NaN;
+  private lastText = '';
+  private wasVisible = false;
 
   constructor() {
     const inner = h('div', 'bs-toast__inner bs-display');
@@ -23,10 +25,16 @@ export class Toast {
     const t = m.toast;
     const visible = t !== null && now - t.t < TOAST_MS && now >= t.t - 50;
     this.show.set(visible);
+    const wasVisible = this.wasVisible;
+    this.wasVisible = visible;
     if (!visible || !t) return;
     this.text.set(t.text);
     if (t.t !== this.lastT) {
       this.lastT = t.t;
+      // A re-raised sticky toast (same text, still on screen) must not bounce again.
+      const sameText = t.text === this.lastText;
+      this.lastText = t.text;
+      if (sameText && wasVisible) return;
       pop(this.root, [
         { transform: 'translateX(-50%) scale(.3) rotate(-10deg)', opacity: 0 },
         { transform: 'translateX(-50%) scale(1.12) rotate(2deg)', opacity: 1, offset: 0.6 },

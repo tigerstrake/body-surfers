@@ -81,32 +81,77 @@ export const CAMERA_STATUS_COPY: Record<VisionStatus, string> = {
   error: 'CAMERA UNAVAILABLE',
 };
 
-/** Turn a raw getUserMedia / MediaPipe error into something a passer-by can act on. */
-export function friendlyError(raw: string): { title: string; body: string } {
+export type CameraErrorKind = 'blocked' | 'missing' | 'busy' | 'disconnected' | 'model' | 'unknown';
+
+/**
+ * Classify a raw getUserMedia / MediaPipe error string. Pure (no DOM) so it is unit-tested.
+ * Order matters: permission wins over everything (the blocked message says "reload", which
+ * must never be read as a model "load" failure), and "load" only matches as a whole word.
+ */
+export function classifyCameraError(raw: string): CameraErrorKind {
   const e = raw.toLowerCase();
-  if (/notallowed|denied|permission|security/.test(e)) {
-    return {
-      title: 'CAMERA BLOCKED',
-      body: 'Click the camera icon in the address bar, choose "Allow", then try again.',
-    };
-  }
-  if (/notfound|not found|no camera|devicesnotfound|overconstrained/.test(e)) {
-    return { title: 'NO CAMERA FOUND', body: 'Plug in a webcam (or pick another one in Settings), then try again.' };
-  }
-  if (/notreadable|in use|could not start|trackstart|busy|abort/.test(e)) {
-    return {
-      title: 'CAMERA IS BUSY',
-      body: 'Another app is using the camera. Quit Zoom, FaceTime or Photo Booth, then try again.',
-    };
-  }
-  if (/model|wasm|fetch|network|load/.test(e)) {
-    return { title: "BODY TRACKING DIDN'T LOAD", body: 'Reload the page. If it keeps happening, play with the keyboard.' };
-  }
-  return { title: 'CAMERA TROUBLE', body: 'Check the camera and try again, or play with the keyboard.' };
+  if (/notallowed|securityerror|permission|blocked|denied/.test(e)) return 'blocked';
+  if (/disconnect|unplugged|track ended|ended unexpectedly/.test(e)) return 'disconnected';
+  if (/notfound|not found|no camera|devicesnotfound|overconstrained/.test(e)) return 'missing';
+  if (/notreadable|in use|could ?n[o']t start|trackstart|busy|aborterror/.test(e)) return 'busy';
+  if (/model|wasm|fetch|network|\bload(ed|ing)?\b|\bto load\b/.test(e)) return 'model';
+  return 'unknown';
 }
 
-export const BOOT_TIPS: readonly string[] = [
-  'Allow camera access when the browser asks',
-  'Close other apps that use the camera',
-  'Face a light so we can see you',
+export interface FriendlyError {
+  kind: CameraErrorKind;
+  title: string;
+  body: string;
+  /** Only the steps that fit this error (never repeats the body). */
+  tips: readonly string[];
+}
+
+const ERROR_COPY: Record<CameraErrorKind, Omit<FriendlyError, 'kind'>> = {
+  blocked: {
+    title: 'CAMERA BLOCKED',
+    body: "The browser isn't letting the game use your camera.",
+    tips: ['Click the camera icon in the address bar', 'Choose "Allow", then press TRY AGAIN'],
+  },
+  disconnected: {
+    title: 'CAMERA UNPLUGGED',
+    body: 'The camera disconnected.',
+    tips: ['Plug it back in, then press TRY AGAIN', 'Or keep going with the keyboard'],
+  },
+  missing: {
+    title: 'NO CAMERA FOUND',
+    body: "We couldn't find a webcam.",
+    tips: ['Plug in a webcam, then press TRY AGAIN', 'Or pick another camera in Settings'],
+  },
+  busy: {
+    title: 'CAMERA IS BUSY',
+    body: 'Another app is using the camera.',
+    tips: ['Quit Zoom, FaceTime, Meet or Photo Booth', 'Close other tabs that use the camera'],
+  },
+  model: {
+    title: "BODY TRACKING DIDN'T LOAD",
+    body: 'The pose model failed to download.',
+    tips: ['Check your connection and reload the page', 'Still stuck? Play with the keyboard'],
+  },
+  unknown: {
+    title: 'CAMERA TROUBLE',
+    body: "The camera didn't start.",
+    tips: ['Check the camera, then press TRY AGAIN', 'Or play with the keyboard'],
+  },
+};
+
+/** Turn a raw getUserMedia / MediaPipe error into something a passer-by can act on. */
+export function friendlyError(raw: string): FriendlyError {
+  const kind = classifyCameraError(raw);
+  return { kind, ...ERROR_COPY[kind] };
+}
+
+/** One-line controls primer (boot + lobby). */
+export const CONTROLS_CAMERA: readonly { icon: string; label: string }[] = [
+  { icon: '⬅➡', label: 'Step' },
+  { icon: '⬆', label: 'Jump' },
+  { icon: '⬇', label: 'Squat' },
+];
+export const CONTROLS_KEYBOARD: readonly { icon: string; label: string }[] = [
+  { icon: '←→', label: 'Arrows' },
+  { icon: '␣', label: 'Space' },
 ];

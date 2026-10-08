@@ -85,7 +85,14 @@ async function start(): Promise<void> {
     log(`started (${vision.delegate ?? '?'} delegate)`);
     const list = await vision.listCameras();
     const cur = cams.value;
-    cams.innerHTML = list.map((d, i) => `<option value="${d.deviceId}">${d.label || 'camera ' + (i + 1)}</option>`).join('');
+    cams.replaceChildren(
+      ...list.map((d, i) => {
+        const opt = document.createElement('option');
+        opt.value = d.deviceId;
+        opt.textContent = d.label || `camera ${i + 1}`;
+        return opt;
+      }),
+    );
     if (cur) cams.value = cur;
   } catch (e) {
     log(`ERROR ${e instanceof Error ? e.message : String(e)}`);

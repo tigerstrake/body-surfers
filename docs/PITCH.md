@@ -14,7 +14,11 @@ walk up to at a booth and play in five seconds, with no install and nothing to h
 ## What it does
 
 - A 3D endless runner in the style of Subway Surfers: three lanes, trains, barriers, ramps
-  onto train roofs, coins, and four power-ups (magnet, 2x score, super sneakers, hoverboard).
+  onto train roofs, coins, and eight power-ups: magnet, 2x score, super sneakers, hoverboard,
+  jetpack (fly over the trains on a coin trail), slow-mo, star (invincible, smash through
+  obstacles) and coin rain.
+- An endless speed ramp: 13 m/s at the start, easing toward 27 m/s, then +0.05 m/s every
+  second up to a 48 m/s cap.
 - **Your body is the controller.** Where you stand picks the lane. Jump to jump, squat to
   roll. Lane zones and jump/squat lines are scaled to your body size, so it works whether
   you stand 1.5 m or 3 m away.
@@ -26,7 +30,9 @@ walk up to at a booth and play in five seconds, with no install and nothing to h
   photo leaderboard. A second-screen "Hall of Fame" page shows the board and live scores.
 - A live webcam overlay shows your skeleton, lane zones and jump/duck lines, so players see
   what the game sees.
-- 3-second calibration hidden in the countdown, and a 25-second tutorial that teaches each move.
+- "Copy my moves": the runner's arms and upper body mirror the player's (toggle in Settings).
+- 3-second calibration hidden in the countdown, and a roughly 27-second tutorial that teaches
+  each move. It shows once per browser.
 - Keyboard fallback and an AI autopilot for when the camera or the lighting does not cooperate.
 
 ## How we built it
@@ -74,13 +80,14 @@ walk up to at a booth and play in five seconds, with no install and nothing to h
 
 ## Accomplishments that we're proud of
 
-- It is genuinely playable with your body and people come out sweaty and laughing.
-  TODO(verify): add real playtest observations.
+- It is playable with your body through a normal laptop webcam; we tested it ourselves with
+  real cameras, not only the synthetic fake-camera harness.
 - Zero-touch flow: walk up, raise hands, play, crash, laugh at your selfie, raise hands again.
 - Real 2-player split-screen racing on one laptop camera.
-- Everything, including art, music and sound, is generated in code, and it runs fully offline.
-- TODO(verify): performance numbers (e.g. fps at 1440p with two views plus inference on an
-  M-series MacBook).
+- Everything, including art, music and sound, is generated in code, and the models and
+  runtime are self-hosted.
+- 238 unit tests and 12 end-to-end Playwright scenarios, including a synthetic webcam person
+  (`tools/fakecam`) that drives the real vision pipeline.
 
 ## What we learned
 
@@ -93,7 +100,8 @@ walk up to at a booth and play in five seconds, with no install and nothing to h
 
 ## What's next for BODY SURFERS
 
-- Jetpack power-up and character skins.
+- Character skins.
+- A seated / arms-only mode for accessibility.
 - QR code to download your crash selfie.
 - Daily seed with a shared online leaderboard (opt-in).
 - Crash replays from a spectator camera.
