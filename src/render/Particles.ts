@@ -50,8 +50,11 @@ export class Particles {
   private readonly posAttr: BufferAttribute;
   private readonly tintAttr: BufferAttribute;
   private readonly sizeAttr: BufferAttribute;
+  private readonly attrs: readonly BufferAttribute[];
   private cursor = 0;
-  private alive = 0;
+  /** Index span [lo, hi] that may hold live particles (hi < lo = none): update/upload only that. */
+  private lo = 0;
+  private hi = -1;
   /** Fraction of requested particles actually spawned (quality). */
   scale = 1;
 
@@ -70,6 +73,7 @@ export class Particles {
     this.posAttr = new BufferAttribute(this.pos, 3).setUsage(DynamicDrawUsage);
     this.tintAttr = new BufferAttribute(this.tint, 4).setUsage(DynamicDrawUsage);
     this.sizeAttr = new BufferAttribute(this.size, 1).setUsage(DynamicDrawUsage);
+    this.attrs = [this.posAttr, this.tintAttr, this.sizeAttr];
     this.geo.setAttribute('position', this.posAttr);
     this.geo.setAttribute('tint', this.tintAttr);
     this.geo.setAttribute('size', this.sizeAttr);
@@ -102,6 +106,9 @@ export class Particles {
     for (let k = 0; k < count; k++) {
       const i = this.cursor;
       this.cursor = (this.cursor + 1) % this.capacity;
+      if (this.hi < this.lo) this.lo = this.hi = i;
+      else if (i < this.lo) this.lo = i;
+      else if (i > this.hi) this.hi = i;
       const a = rand() * Math.PI * 2;
       const e = rand() * 2 - 1;
       const sp = speed * (0.4 + rand() * 0.6);
@@ -124,15 +131,16 @@ export class Particles {
       this.tint[i * 4 + 2] = Math.min(1, color.b * lum);
       this.tint[i * 4 + 3] = 1;
     }
-    this.alive = this.capacity;
   }
 
   update(dt: number, worldSpeed: number): void {
-    if (this.alive === 0) return;
-    let any = 0;
-    for (let i = 0; i < this.capacity; i++) {
+    const lo = this.lo;
+    const hi = this.hi;
+    if (hi < lo) return;
+    let newLo = this.capacity;
+    let newHi = -1;
+    for (let i = lo; i <= hi; i++) {
       if (this.life[i] <= 0) continue;
-      any++;
       const l = (this.life[i] -= dt);
       if (l <= 0) {
         this.size[i] = 0;
@@ -149,18 +157,27 @@ export class Particles {
       const f = l / this.maxLife[i];
       this.tint[i * 4 + 3] = f < 0.5 ? f * 2 : 1;
       this.size[i] = this.baseSize[i] * (0.5 + 0.5 * f);
+      if (i < newLo) newLo = i;
+      newHi = i;
     }
-    if (any === 0) this.alive = 0;
-    this.posAttr.needsUpdate = true;
-    this.tintAttr.needsUpdate = true;
-    this.sizeAttr.needsUpdate = true;
+    // Upload the old span: it includes particles that died this frame (zeroed above).
+    const n = hi - lo + 1;
+    for (const attr of this.attrs) {
+      attr.clearUpdateRanges();
+      attr.addUpdateRange(lo * attr.itemSize, n * attr.itemSize);
+      attr.needsUpdate = true;
+    }
+    this.lo = newHi < 0 ? 0 : newLo;
+    this.hi = newHi;
   }
 
   clear(): void {
     this.life.fill(0);
     this.size.fill(0);
+    this.sizeAttr.clearUpdateRanges();
     this.sizeAttr.needsUpdate = true;
-    this.alive = 0;
+    this.lo = 0;
+    this.hi = -1;
   }
 
   dispose(): void {

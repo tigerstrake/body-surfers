@@ -24,6 +24,7 @@ import type {
 } from '../shared/types';
 import { POWERUP_KINDS, SEGMENT_VARIANTS } from './Assets';
 import type { Assets } from './Assets';
+import { reducedMotion } from '../shared/motion';
 import { CAMERA, COLORS, ENV_AHEAD, ENV_BEHIND, PERIOD, POWERUP_COLORS, QUALITY, SEGMENT_LENGTH } from './config';
 import type { QualityProfile } from './config';
 import { Particles, ScreenTint, SpeedLines } from './Particles';
@@ -32,7 +33,10 @@ import type { RunnerFx } from './Runner';
 import { HashRng, hash2 } from './util/rand';
 import type { MimicPose, Quality } from '../shared/types';
 
-const MAX_COINS = 160;
+// Coin rain (~140) + jetpack sky trail + course coins can all be live at once.
+const MAX_COINS = 480;
+/** Coins this far behind the runner (m) are behind the camera: don't spend instances on them. */
+const COIN_BEHIND_CULL = 3;
 const C_DUST = new Color('#d8c7a8');
 const C_DUST_LIGHT = new Color('#e8dcc4');
 const C_SPARK = new Color('#ffe680');
@@ -310,7 +314,8 @@ export class View {
 
     // impact flash
     this.flash = Math.max(0, this.flash - dt * 4);
-    this.hemi.intensity = 1.9 + this.flash * 2.5 - sl * 0.3 + this.starAmt * 0.15;
+    const flash = reducedMotion() ? this.flash * 0.25 : this.flash; // no bright strobe on crash
+    this.hemi.intensity = 1.9 + flash * 2.5 - sl * 0.3 + this.starAmt * 0.15;
   }
 
   /** 0..1 extra intensity once the world speed passes the old max. */
@@ -557,7 +562,7 @@ export class View {
       const c = items[i];
       const z = -(c.s - d);
       if (c.kind === 'coin') {
-        if (n >= MAX_COINS) continue;
+        if (n >= MAX_COINS || z > CAMERA.posZ + COIN_BEHIND_CULL) continue;
         dm.position.set(c.x, c.y, z);
         dm.rotation.set(0, t * 4 + c.id * 0.35, 0);
         dm.updateMatrix();
@@ -608,15 +613,16 @@ export class View {
     }
     this.fovKick = damp(this.fovKick, 0, 2.5, dt);
     this.shake = Math.max(0, this.shake - dt * 1.8);
-    const sh = this.shake * this.shake;
+    const calm = reducedMotion(); // prefers-reduced-motion: no shake, rumble or FOV kicks
+    const sh = calm ? 0 : this.shake * this.shake;
     const t = this.time;
     const over = this.overdrive(s);
-    const rumble = over * 0.025;
+    const rumble = calm ? 0 : over * 0.025;
     const sx = sh * 0.45 * Math.sin(t * 57.3) + rumble * Math.sin(t * 93.7);
     const sy = sh * 0.35 * Math.sin(t * 71.1 + 1.3) + rumble * Math.sin(t * 81.3 + 0.7);
 
     const base =
-      lerp(CAMERA.fovMin, CAMERA.fovMax, clamp(s.speedLevel, 0, 1)) + over * 9 + fly * 1.5 - this.slow * 3 + this.fovKick;
+      lerp(CAMERA.fovMin, CAMERA.fovMax, clamp(s.speedLevel, 0, 1)) + over * 9 + fly * 1.5 - this.slow * 3 + (calm ? 0 : this.fovKick);
     let v = base;
     if (this.aspect < CAMERA.refAspect) {
       const h = 2 * Math.atan(Math.tan((base * DEG) / 2) * CAMERA.refAspect);

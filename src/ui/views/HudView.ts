@@ -277,6 +277,7 @@ export class HudView {
     this.players = [new PlayerHud(0), new PlayerHud(1)];
     const pauseBtn = button('bs-hud__pause', icon(ICONS.pause, 'bs-hud__pause-icon'));
     pauseBtn.title = 'Pause (P)';
+    pauseBtn.setAttribute('aria-label', 'Pause');
     pauseBtn.addEventListener('click', () => emit({ type: 'pause-toggle' }));
     this.root = h('div', 'bs-hud', this.players[0].root, this.players[1].root, h('div', 'bs-hud__divider'), pauseBtn);
     this.playersAttr = new Attr(this.root, 'data-players');

@@ -219,3 +219,7 @@ body.is-tv .hall-play { display: none; }
 
 /* Dev-only: keep Vite HMR error overlays (from other modules) off the booth TV. */
 vite-error-overlay { display: none !important; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}

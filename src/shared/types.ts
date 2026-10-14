@@ -416,6 +416,10 @@ export interface IAudio {
   setIntensity(level: number): void;
   /** 0..1 progress of a hands-up hold (rising charge tone); 0 = silent. */
   setChargeLevel(level: number): void;
+  /** Drop all power-up audio (jetpack rumble, slowmo/star music feel), e.g. on restart. */
+  clearPowerUps(): void;
+  /** Pause holds looping run sounds (jetpack rumble) silent until unpaused. */
+  setPaused(paused: boolean): void;
   dispose(): void;
 }
 

@@ -107,3 +107,45 @@ describe('leaderboard ties & late photos', () => {
     expect(lb.setPhoto('missing', 'data:image/jpeg;base64,xx')).toBe(false);
   });
 });
+
+describe('leaderboard across tabs', () => {
+  it('a stale tab merges with entries another tab wrote instead of overwriting them', () => {
+    const st = new MemoryStorage();
+    const tabA = new LeaderboardStore(st);
+    const tabB = new LeaderboardStore(st);
+    tabA.add([entry('a', 100)]);
+    tabB.add([entry('b', 50)]); // B never saw A's entry
+    const raw = JSON.parse(st.getItem(STORAGE_KEYS.leaderboard) ?? '[]') as LeaderboardEntry[];
+    expect(raw.map((e) => e.id)).toEqual(['a', 'b']);
+    expect(tabA.reload()).toBe(true);
+    expect(tabA.entries.map((e) => e.id)).toEqual(['a', 'b']);
+    expect(tabA.reload()).toBe(false);
+  });
+
+  it('keeps entries in memory when storage cannot be written at all', () => {
+    const st = new MemoryStorage();
+    const lb = new LeaderboardStore(st);
+    lb.add([entry('a', 10)]);
+    st.setItem = () => {
+      throw new Error('QuotaExceededError');
+    };
+    lb.add([entry('b', 20)]);
+    lb.add([entry('c', 30)]); // must not re-read storage (which lacks b) over memory
+    expect(lb.entries.map((e) => e.id)).toEqual(['c', 'b', 'a']);
+  });
+
+  it('keeps a selfie that only fits in memory when syncing', () => {
+    const st = new MemoryStorage();
+    const lb = new LeaderboardStore(st);
+    lb.add([entry('a', 10)]);
+    const real = st.setItem.bind(st);
+    // Photos never fit; plain entries do.
+    st.setItem = (k, v) => {
+      if (v.includes('data:image')) throw new Error('QuotaExceededError');
+      real(k, v);
+    };
+    expect(lb.setPhoto('a', 'data:image/jpeg;base64,xx')).toBe(true);
+    lb.add([entry('b', 5)]);
+    expect(lb.entries.find((e) => e.id === 'a')?.photo).toBe('data:image/jpeg;base64,xx');
+  });
+});

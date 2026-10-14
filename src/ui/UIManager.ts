@@ -18,6 +18,7 @@ import { HudView, type HudPhase } from './views/HudView';
 import { WebcamOverlay } from './views/WebcamOverlay';
 import { SettingsPanel } from './views/SettingsPanel';
 import { CornerButtons, DebugOverlay, Toast } from './views/Chrome';
+import { Announcer } from './announcer';
 
 interface Built {
   root: HTMLElement;
@@ -30,6 +31,7 @@ interface Built {
   settings: SettingsPanel;
   debug: DebugOverlay;
   toast: Toast;
+  announcer: Announcer;
   corner: CornerButtons;
   screenAttr: Attr;
   playersAttr: Attr;
@@ -56,6 +58,7 @@ export class UIManager implements IUI {
     const settings = new SettingsPanel(emit);
     const debug = new DebugOverlay();
     const toast = new Toast();
+    const announcer = new Announcer();
     const corner = new CornerButtons(emit);
     const camDock = h('div', 'bs-camdock');
 
@@ -68,7 +71,7 @@ export class UIManager implements IUI {
       s.set(false);
       shows.set(v, s);
     }
-    const ui = h('div', 'bs-ui', hud.root, layer, camDock, toast.root, corner.root, settings.root, debug.root);
+    const ui = h('div', 'bs-ui', hud.root, layer, camDock, toast.root, corner.root, settings.root, debug.root, announcer.root);
     root.append(ui);
     camDock.append(cam.root);
     this.camParent = camDock;
@@ -85,6 +88,7 @@ export class UIManager implements IUI {
       settings,
       debug,
       toast,
+      announcer,
       corner,
       screenAttr: new Attr(ui, 'data-screen'),
       playersAttr: new Attr(ui, 'data-players'),
@@ -125,6 +129,7 @@ export class UIManager implements IUI {
     this.placeCamera(model);
     ui.cam.update(model, now);
     ui.toast.update(model, now);
+    ui.announcer.update(model);
     ui.corner.update(model);
     ui.settings.update(model);
     ui.debug.update(model, now);

@@ -94,6 +94,8 @@ const withoutPhoto = (e: LeaderboardEntry): LeaderboardEntry => (e.photo ? { ...
 
 export class LeaderboardStore {
   private list: LeaderboardEntry[];
+  /** The last write failed entirely: memory is ahead of storage, so don't re-read over it. */
+  private unsaved = false;
 
   constructor(
     private readonly storage: StorageLike,
@@ -110,6 +112,7 @@ export class LeaderboardStore {
 
   /** Insert entries; returns final ranks for the ones that made the board. */
   add(added: readonly LeaderboardEntry[]): Map<string, number> {
+    this.sync();
     const r = insertEntries(this.list, added, this.max);
     if (r.ranks.size > 0) {
       this.list = r.entries;
@@ -119,6 +122,7 @@ export class LeaderboardStore {
   }
 
   rename(id: string, name: string): boolean {
+    this.sync();
     const i = this.list.findIndex((e) => e.id === id);
     if (i < 0) return false;
     const clean = sanitizeName(name, this.list[i].name);
@@ -131,8 +135,10 @@ export class LeaderboardStore {
 
   /** Attach a late crash selfie to an entry (rewrites the stored array). */
   setPhoto(id: string, photo: string): boolean {
+    if (!photo.startsWith('data:image/')) return false;
+    this.sync();
     const i = this.list.findIndex((e) => e.id === id);
-    if (i < 0 || !photo.startsWith('data:image/')) return false;
+    if (i < 0) return false;
     this.list = this.list.map((e, k) => (k === i ? { ...e, photo } : e));
     this.persist();
     return true;
@@ -143,17 +149,46 @@ export class LeaderboardStore {
     this.persist();
   }
 
-  /** Re-read from storage (e.g. another tab changed it). */
-  reload(): void {
-    this.list = sanitizeLeaderboard(readJson(this.storage, this.key), this.max);
+  /** Re-read from storage (e.g. another tab changed it). Returns true when the list changed. */
+  reload(): boolean {
+    const before = this.list;
+    this.sync();
+    return this.list !== before;
+  }
+
+  /**
+   * Read-modify-write: pick up other tabs' changes before writing, so a stale tab never
+   * overwrites them. Selfies that only fit in memory (quota) are kept for matching entries.
+   */
+  private sync(): void {
+    if (this.unsaved) return;
+    const stored = sanitizeLeaderboard(readJson(this.storage, this.key), this.max);
+    const photos = new Map<string, string>();
+    for (const e of this.list) if (e.photo) photos.set(e.id, e.photo);
+    const next = stored.map((e) => (!e.photo && photos.has(e.id) ? { ...e, photo: photos.get(e.id)! } : e));
+    if (!sameEntries(next, this.list)) this.list = next;
   }
 
   private persist(): void {
+    this.unsaved = false;
     if (writeJson(this.storage, this.key, this.list)) return;
     // Quota exceeded — the selfies are the bulk. Keep them in memory for this session but
     // store fewer: first drop the bottom half's photos, then all of them.
     const keep = Math.ceil(this.list.length / 2);
     if (writeJson(this.storage, this.key, this.list.map((e, i) => (i < keep ? e : withoutPhoto(e))))) return;
-    writeJson(this.storage, this.key, this.list.map(withoutPhoto));
+    if (!writeJson(this.storage, this.key, this.list.map(withoutPhoto))) {
+      this.unsaved = true;
+      console.warn('[leaderboard] could not save (storage full or disabled); kept in memory for this session');
+    }
   }
+}
+
+function sameEntries(a: readonly LeaderboardEntry[], b: readonly LeaderboardEntry[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i];
+    const y = b[i];
+    if (x.id !== y.id || x.name !== y.name || x.score !== y.score || x.photo !== y.photo) return false;
+  }
+  return true;
 }

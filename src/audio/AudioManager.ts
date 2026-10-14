@@ -88,6 +88,7 @@ export class AudioManager implements IAudio {
   /** Active power-ups as `${playerId}:${kind}` (drives music colouring + jetpack rumble). */
   private readonly activePU = new Set<string>();
   private readonly rumbles = new Map<PlayerId, Rumble>();
+  private paused = false;
 
   get unlocked(): boolean {
     return this.g !== null;
@@ -144,7 +145,10 @@ export class AudioManager implements IAudio {
     if (mode !== 'off' && mode !== 'lobby' && mode !== 'game' && mode !== 'gameover') return;
     this.musicMode = mode;
     // Leaving the run (game over / lobby) may never send powerUpEnd: drop all power-up state.
-    if (mode !== 'game') this.clearPowerUps();
+    if (mode !== 'game') {
+      this.paused = false;
+      this.clearPowerUps();
+    }
     this.g?.music.setMode(mode);
   }
 
@@ -311,6 +315,8 @@ export class AudioManager implements IAudio {
         break;
       }
       case 'crash': {
+        // A dead runner never sends powerUpEnd (2P: the other player keeps racing).
+        this.clearPlayerPowerUps(playerId);
         const v = this.voice('crash', base);
         if (!v) return;
         const t = v.start;
@@ -636,11 +642,35 @@ export class AudioManager implements IAudio {
     if (kind === 'slowmo' || kind === 'star') this.applyFeel();
   }
 
-  private clearPowerUps(): void {
+  clearPowerUps(): void {
     if (this.activePU.size === 0 && this.rumbles.size === 0) return;
     this.activePU.clear();
     for (const pid of [...this.rumbles.keys()]) this.stopRumble(pid);
     this.applyFeel();
+  }
+
+  setPaused(paused: boolean): void {
+    if (this.paused === paused) return;
+    this.paused = paused;
+    const g = this.g;
+    if (!g) return;
+    const now = g.ctx.currentTime;
+    for (const r of this.rumbles.values()) {
+      r.gain.gain.cancelScheduledValues(now);
+      r.gain.gain.setTargetAtTime(paused ? 0 : JETPACK_RUMBLE.peak, now, JETPACK_RUMBLE.tc);
+    }
+  }
+
+  private clearPlayerPowerUps(pid: PlayerId): void {
+    const prefix = `${pid}:`;
+    let changed = false;
+    for (const k of [...this.activePU]) {
+      if (!k.startsWith(prefix)) continue;
+      this.activePU.delete(k);
+      changed = true;
+    }
+    this.stopRumble(pid);
+    if (changed) this.applyFeel();
   }
 
   private anyActive(kind: PowerUpKind): boolean {
@@ -678,7 +708,7 @@ export class AudioManager implements IAudio {
     lfoDepth.connect(lp.frequency);
     const gain = ctx.createGain();
     gain.gain.value = 0;
-    gain.gain.setTargetAtTime(JETPACK_RUMBLE.peak, now + 0.2, JETPACK_RUMBLE.tc * 3);
+    if (!this.paused) gain.gain.setTargetAtTime(JETPACK_RUMBLE.peak, now + 0.2, JETPACK_RUMBLE.tc * 3);
     src.connect(lp);
     let tail: AudioNode = lp;
     if (typeof ctx.createStereoPanner === 'function') {

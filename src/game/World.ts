@@ -39,6 +39,8 @@ const POWERUP_DURATION: Record<PowerUpKind, number> = {
 };
 
 /** Jetpack flight phases. */
+/** Shared result for steps without events (frozen: consumers must not mutate drained arrays). */
+const NO_EVENTS = Object.freeze([]) as unknown as GameEvent[];
 const JET_NONE = 0;
 const JET_FLY = 1;
 const JET_DESCEND = 2;
@@ -544,7 +546,8 @@ export class World implements IWorld {
     const dir = (obsX > this.prevX ? 1 : -1) as -1 | 1;
     p.x = obsX - dir * (half + 0.001);
     p.lane = clampLane(p.lane - dir);
-    // If x is now nearer another lane center, take that one (never leave x off-lane).
+    // desiredLane is kept on purpose: like a pre-check block, the runner waits beside the
+    // train and completes the move once it has passed (camera lanes are absolute).
     p.blockedDir = dir;
     if (!this.blockedEmitted) {
       this.blockedEmitted = true;
@@ -908,6 +911,7 @@ export class World implements IWorld {
 
   drainEvents(): GameEvent[] {
     const e = this.events;
+    if (e.length === 0) return NO_EVENTS; // most steps: no garbage
     this.events = [];
     return e;
   }

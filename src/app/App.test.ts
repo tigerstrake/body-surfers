@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ActionEvent, MenuKey, PlayerCount, PlayerId, Screen, UICommand, VisionFrame, VisionStatus } from '../shared/types';
+import type { ActionEvent, MenuKey, PlayerCount, PlayerId, Screen, Settings, UICommand, VisionFrame, VisionStatus } from '../shared/types';
 import { DEFAULT_SETTINGS } from '../shared/constants';
 import { parseParams } from '../shared/params';
 import { AutoPilot, World } from '../game';
@@ -24,6 +24,7 @@ function harness() {
     resetCalibration: vi.fn(),
     startCalibration: vi.fn(),
     startCamera: vi.fn(async () => {}),
+    loadModel: vi.fn(async () => {}),
     listCameras: vi.fn(async () => []),
     dispose: vi.fn(),
   };
@@ -37,6 +38,10 @@ function harness() {
     vision: vision as typeof vision | null,
     modelReady: true,
     modelLoad: null as Promise<void> | null,
+    activeModel: 'lite' as Settings['model'] | null,
+    stored: {} as Partial<Settings>,
+    settingsStore: { save: vi.fn() },
+    loadingSince: 0,
     frame: null as VisionFrame | null,
     bootError: null as string | null,
     bootPending: false,
@@ -66,6 +71,8 @@ function harness() {
       setMusic: vi.fn(),
       setChargeLevel: vi.fn(),
       setIntensity: vi.fn(),
+      clearPowerUps: vi.fn(),
+      setPaused: vi.fn(),
       playUi: vi.fn(),
     },
   };
@@ -80,6 +87,8 @@ function harness() {
     onCameraLost(): void;
     adaptQuality(now: number, deltaMs: number): void;
     refreshStickyToast(): void;
+    loadModel(): void;
+    enterPaused(reason: 'user' | 'tracking-lost'): void;
   };
   return { app, vision };
 }
@@ -304,5 +313,34 @@ describe('App review fixes', () => {
     two.screen = 'playing';
     for (let i = 0; i < 60; i++) two.adaptQuality(i * 0.03, 30);
     expect(two.renderer.setQuality).toHaveBeenCalledWith('low');
+  });
+});
+
+describe('App run resets', () => {
+  it('a new countdown drops power-up audio left from the last run; pause holds it', () => {
+    const { app } = harness();
+    app.beginCountdown([0], 0);
+    expect(app.audio.clearPowerUps).toHaveBeenCalledTimes(1);
+    expect(app.audio.setPaused).toHaveBeenLastCalledWith(false);
+    app.screen = 'playing';
+    app.enterPaused('user');
+    expect(app.audio.setPaused).toHaveBeenLastCalledWith(true);
+  });
+
+  it('a failed model switch keeps the old model ready and reverts the setting', async () => {
+    const { app, vision } = harness();
+    app.settings = { ...app.settings, model: 'full' };
+    const kept = Object.assign(new Error('download failed'), { keptPrevious: true });
+    vision.loadModel.mockRejectedValueOnce(kept);
+    app.screen = 'lobby';
+    app.loadModel();
+    expect(app.modelReady).toBe(false);
+    await app.modelLoad?.catch(() => undefined);
+    await Promise.resolve();
+    expect(app.modelReady).toBe(true);
+    expect(app.settings.model).toBe('lite');
+    expect(app.screen).toBe('lobby');
+    expect(app.toast?.text).toMatch(/still using lite/);
+    expect(app.report).not.toHaveBeenCalled();
   });
 });

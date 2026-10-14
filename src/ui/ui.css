@@ -559,3 +559,6 @@
 .bs-set__adv[open] .bs-set__advsum::before { transform: rotate(90deg); }
 .bs-set__advgrid { display: grid; grid-template-columns: 1fr 1fr; column-gap: calc(var(--u) * 2.4); row-gap: calc(var(--u) * 0.45); margin-top: calc(var(--u) * 0.4); }
 .bs-set__privacy { margin: 0; flex: 1; text-align: center; font-size: calc(var(--u) * 1.3); color: #4a5270; }
+
+/* Screen-reader-only live region (announcer.ts) */
+.bs-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }

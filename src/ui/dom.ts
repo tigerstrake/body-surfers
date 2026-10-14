@@ -1,5 +1,6 @@
 // Tiny DOM helpers + cached bindings. Every binding remembers the last value it wrote, so
 // render() can be called every frame and only touches the DOM when something changed.
+import { reducedMotion } from '../shared/motion';
 
 export type Child = Node | string | null | undefined | false;
 
@@ -167,7 +168,7 @@ export function button(cls: string, ...children: Child[]): HTMLButtonElement {
 
 /** Restart a one-shot Web Animation on an element (cheap: only called on value changes). */
 export function pop(el: Element, keyframes: Keyframe[], duration: number, easing = 'cubic-bezier(.2,1.6,.4,1)'): void {
-  if (typeof (el as HTMLElement).animate !== 'function') return;
+  if (typeof (el as HTMLElement).animate !== 'function' || reducedMotion()) return;
   for (const a of el.getAnimations()) if (a.id === 'bs-pop') a.cancel();
   const anim = el.animate(keyframes, { duration, easing });
   anim.id = 'bs-pop';

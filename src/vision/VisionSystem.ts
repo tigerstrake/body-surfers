@@ -18,6 +18,8 @@ export const MODEL_DOWNLOAD_FAILED_MESSAGE =
   "Couldn't download the body-tracking model. Check your connection and reload.";
 /** Consecutive detectForVideo failures before switching to CPU / reporting an error. */
 const MAX_CONSECUTIVE_FAILURES = 30;
+/** A crash selfie needs a tracked frame at most this old. */
+const SELFIE_MAX_AGE_MS = 300;
 
 function errName(e: unknown): string {
   return e && typeof e === 'object' && 'name' in e ? String((e as { name: unknown }).name) : '';
@@ -42,6 +44,14 @@ function cameraErrorMessage(e: unknown): string {
   }
 }
 
+/**
+ * A model or camera switch failed but the previous one is still running. The status stays
+ * healthy; callers should revert the setting rather than show a fatal error.
+ */
+export class KeptPreviousError extends Error {
+  readonly keptPrevious = true;
+}
+
 export class VisionSystem implements IVisionSystem {
   private _status: VisionStatus = 'idle';
   private _error: string | null = null;
@@ -49,11 +59,14 @@ export class VisionSystem implements IVisionSystem {
   private fileset: WasmFileset | null = null;
   private landmarker: PoseLandmarker | null = null;
   private model: PoseModel | null = null;
+  /** numPoses the current landmarker was built with (setPlayerCount may change it mid-load). */
+  private readonly posesOf = new WeakMap<PoseLandmarker, number>();
   private loadToken = 0;
   private loading = false;
   private video: HTMLVideoElement | null = null;
   private stream: MediaStream | null = null;
   private cameraToken = 0;
+  private latestStart: { token: number; promise: Promise<void> } | null = null;
   private cameraReady = false;
   private disposed = false;
 
@@ -136,6 +149,8 @@ export class VisionSystem implements IVisionSystem {
       this.landmarker = lm;
       this.model = model;
       this.delegate = delegate;
+      // setPlayerCount / lockSlots during the load went to the old (or no) landmarker.
+      if (this.posesOf.get(lm) !== this.numPoses()) this.applyNumPoses();
       if (old) {
         try {
           old.close();
@@ -156,20 +171,29 @@ export class VisionSystem implements IVisionSystem {
         `[vision] could not load pose model '${model}' (${ASSET_PATHS.poseModel(model)}, WASM ${ASSET_PATHS.mediapipeWasm}):`,
         errMsg(e),
       );
+      if (this.landmarker && !this.disposed) {
+        // Switching models failed but the previous one still works: keep tracking with it.
+        this._status = this.cameraReady ? 'running' : 'model-ready';
+        this._error = null;
+        throw new KeptPreviousError(MODEL_DOWNLOAD_FAILED_MESSAGE);
+      }
       throw this.fail(MODEL_DOWNLOAD_FAILED_MESSAGE);
     }
   }
 
-  private createLandmarker(model: PoseModel, delegate: 'GPU' | 'CPU'): Promise<PoseLandmarker> {
-    return PoseLandmarker.createFromOptions(this.fileset as WasmFileset, {
+  private async createLandmarker(model: PoseModel, delegate: 'GPU' | 'CPU'): Promise<PoseLandmarker> {
+    const numPoses = this.numPoses();
+    const lm = await PoseLandmarker.createFromOptions(this.fileset as WasmFileset, {
       baseOptions: { modelAssetPath: assetUrl(ASSET_PATHS.poseModel(model)), delegate },
       runningMode: 'VIDEO',
-      numPoses: this.numPoses(),
+      numPoses,
       minPoseDetectionConfidence: C.minPoseDetectionConfidence,
       minPosePresenceConfidence: C.minPosePresenceConfidence,
       minTrackingConfidence: C.minTrackingConfidence,
       outputSegmentationMasks: false,
     });
+    this.posesOf.set(lm, numPoses);
+    return lm;
   }
 
   /** Runtime failures on the GPU delegate: rebuild the landmarker on CPU (once per model load). */
@@ -200,6 +224,7 @@ export class VisionSystem implements IVisionSystem {
     const old = this.landmarker;
     this.landmarker = lm;
     this.delegate = 'CPU';
+    if (this.posesOf.get(lm) !== this.numPoses()) this.applyNumPoses();
     this.consecutiveFailures = 0;
     this.recovering = false;
     if (old && old !== lm) {
@@ -266,10 +291,25 @@ export class VisionSystem implements IVisionSystem {
     if (!cams.some((d) => d.deviceId === id)) this.cameraDisconnected(stream);
   }
 
-  async startCamera(deviceId?: string | null): Promise<void> {
+  startCamera(deviceId?: string | null): Promise<void> {
+    const token = this.cameraToken + 1;
+    const promise = this.startCameraInner(deviceId);
+    this.latestStart = { token, promise };
+    return promise;
+  }
+
+  /** A newer startCamera replaced this one: settle with that call's outcome instead. */
+  private superseded(token: number): Promise<void> | undefined {
+    const latest = this.latestStart;
+    return latest && latest.token > token ? latest.promise : undefined;
+  }
+
+  private async startCameraInner(deviceId?: string | null): Promise<void> {
     const token = ++this.cameraToken;
-    if (!this.loading) this._status = 'starting-camera';
-    this._error = null;
+    // Switching cameras: the old stream keeps running (and stays healthy) until the new one works.
+    const switching = this.cameraReady && this.stream !== null && this._status === 'running';
+    if (!this.loading && !switching) this._status = 'starting-camera';
+    if (!switching) this._error = null;
     if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
       throw this.fail('Camera unavailable: this page must be served over HTTPS or from localhost.');
     }
@@ -295,12 +335,13 @@ export class VisionSystem implements IVisionSystem {
         } else throw e;
       }
     } catch (e) {
-      if (token !== this.cameraToken) return;
+      if (token !== this.cameraToken) return this.superseded(token);
+      if (switching && this.cameraReady && !this.disposed) throw new KeptPreviousError(cameraErrorMessage(e));
       throw this.fail(cameraErrorMessage(e));
     }
     if (token !== this.cameraToken || this.disposed) {
       stream.getTracks().forEach((t) => t.stop());
-      return;
+      return this.disposed ? undefined : this.superseded(token);
     }
     this.stopStream();
     this.stream = stream;
@@ -311,12 +352,18 @@ export class VisionSystem implements IVisionSystem {
       await video.play().catch(() => undefined);
       await this.waitForFrames(video);
     } catch (e) {
-      if (token !== this.cameraToken) return;
+      if (token !== this.cameraToken) return this.superseded(token);
+      // No frames: release the camera (light off) rather than holding it until a retry.
+      if (this.stream === stream) {
+        this.stopStream();
+        video.srcObject = null;
+      }
       throw this.fail(errMsg(e));
     }
-    if (token !== this.cameraToken) return;
+    if (token !== this.cameraToken) return this.superseded(token);
     this.cameraReady = true;
-    this.core.assigner.reset();
+    // While slots are locked (mid-run) keep identities; the app recalibrates for the new framing.
+    if (!this.core.assigner.locked) this.core.assigner.reset();
     this.startFrameWatch(video);
     const label = stream.getVideoTracks()[0]?.label ?? '';
     if (/facetime|macbook|built-in/i.test(label)) {
@@ -535,6 +582,10 @@ export class VisionSystem implements IVisionSystem {
     try {
       const lm = this.core.latest[slot];
       if (!this.video || !lm) return null;
+      // Only crop where the player is right now: stale landmarks (they stepped out) would
+      // frame the background or someone else. The caller retries until they're back.
+      const f = this.lastFrame;
+      if (!f || performance.now() - f.t > SELFIE_MAX_AGE_MS || !f.people.some((p) => p.slot === slot)) return null;
       return captureSelfieFromVideo(this.video, lm, this.core.getTuning().mirror, size);
     } catch (e) {
       console.warn('[vision] selfie failed:', errMsg(e));

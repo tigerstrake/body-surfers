@@ -105,6 +105,22 @@ export class SafeAudio implements IAudio {
     }
   }
 
+  clearPowerUps(): void {
+    try {
+      this.inner.clearPowerUps();
+    } catch (e) {
+      this.report('audio.clearPowerUps', e);
+    }
+  }
+
+  setPaused(paused: boolean): void {
+    try {
+      this.inner.setPaused(paused);
+    } catch (e) {
+      this.report('audio.setPaused', e);
+    }
+  }
+
   dispose(): void {
     try {
       this.inner.dispose();

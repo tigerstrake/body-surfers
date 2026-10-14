@@ -3,6 +3,7 @@ import type { LeaderboardEntry } from '../shared/types';
 import { MAX_LEADERBOARD } from '../shared/constants';
 import { renderSelfieCard } from './card';
 import { relativeDate } from './data';
+import { reducedMotion } from '../shared/motion';
 
 interface Slot {
   el: HTMLDivElement;
@@ -89,8 +90,16 @@ export class Wall {
     for (let i = 0; i < board.length; i++) this.empties[i]!.remove();
     this.root.classList.toggle('is-empty', board.length === 0);
 
-    // FLIP
+    // FLIP (skipped for prefers-reduced-motion: cards just appear in place)
+    const calm = reducedMotion();
     for (const [id, s] of this.slots) {
+      if (calm) {
+        if (!before.has(id) && newIds.has(id)) {
+          s.el.classList.add('is-new');
+          window.setTimeout(() => s.el.classList.remove('is-new'), 12000);
+        }
+        continue;
+      }
       const old = before.get(id);
       if (old) {
         const now = s.el.getBoundingClientRect();

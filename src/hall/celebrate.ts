@@ -2,6 +2,7 @@
 import type { LeaderboardEntry } from '../shared/types';
 import { formatNum } from './data';
 import { escapeHtml } from './nowplaying';
+import { reducedMotion } from '../shared/motion';
 
 const COLORS = ['#ffd23f', '#1e90ff', '#ff4757', '#2ed573', '#ffffff', '#ff7a1a'];
 const MAX_P = 700;
@@ -30,6 +31,8 @@ export class Celebrations {
   private readonly ps: Particle[] = [];
   private readonly queue: Pending[] = [];
   private active: { rank: number; until: number; nextBurst: number } | null = null;
+  /** Pending timeout for the pause between two queued celebrations. */
+  private gapTimer: number | null = null;
   private readonly overlay: HTMLElement;
   private readonly headline: HTMLElement;
   private readonly sub: HTMLElement;
@@ -44,7 +47,7 @@ export class Celebrations {
     this.overlay = document.createElement('div');
     this.overlay.className = 'celebrate';
     this.overlay.innerHTML = `<div class="cel-rays"></div><div class="cel-flash"></div>
-      <div class="cel-inner"><div class="cel-headline"></div><img class="cel-card" alt="" /><div class="cel-sub"></div></div>`;
+      <div class="cel-inner" role="status" aria-live="polite" aria-atomic="true"><div class="cel-headline"></div><img class="cel-card" alt="" /><div class="cel-sub"></div></div>`;
     stage.appendChild(this.overlay);
     this.headline = this.overlay.querySelector<HTMLElement>('.cel-headline')!;
     this.sub = this.overlay.querySelector<HTMLElement>('.cel-sub')!;
@@ -52,13 +55,14 @@ export class Celebrations {
   }
 
   get busy(): boolean {
-    return this.active !== null || this.queue.length > 0;
+    return this.active !== null || this.gapTimer !== null || this.queue.length > 0;
   }
 
   enqueue(entry: LeaderboardEntry, rank: number): void {
     this.queue.push({ entry, rank });
     this.queue.sort((a, b) => a.rank - b.rank);
-    if (!this.active) void this.next(performance.now());
+    // During the short gap between celebrations the pending timer will pick this up.
+    if (!this.active && this.gapTimer === null) void this.next(performance.now());
   }
 
   private async next(now: number): Promise<void> {
@@ -76,7 +80,7 @@ export class Celebrations {
     this.overlay.classList.remove('show');
     void this.overlay.offsetWidth; // restart CSS animations
     this.overlay.classList.add('show');
-    this.confetti(champ ? 320 : 160);
+    if (!reducedMotion()) this.confetti(champ ? 320 : 160);
   }
 
   private confetti(n: number): void {
@@ -120,14 +124,19 @@ export class Celebrations {
   tick(now: number, dt: number): void {
     const a = this.active;
     if (a) {
-      if (a.rank === 1 && now >= a.nextBurst) {
+      if (a.rank === 1 && now >= a.nextBurst && !reducedMotion()) {
         this.burst();
         a.nextBurst = now + 450;
       }
       if (now >= a.until) {
         this.active = null;
         this.overlay.classList.remove('show');
-        if (this.queue.length) window.setTimeout(() => void this.next(performance.now()), 500);
+        if (this.queue.length && this.gapTimer === null) {
+          this.gapTimer = window.setTimeout(() => {
+            this.gapTimer = null;
+            void this.next(performance.now());
+          }, 500);
+        }
       }
     }
     const ctx = this.ctx;

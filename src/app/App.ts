@@ -6,7 +6,7 @@ import { KeyboardInput } from '../input';
 import { Renderer } from '../render';
 import { UIManager } from '../ui';
 import { VisionSystem } from '../vision';
-import { PLAYER_LABELS } from '../shared/constants';
+import { PLAYER_LABELS, STORAGE_KEYS } from '../shared/constants';
 import { randomSeed } from '../shared/rng';
 import type {
   ActionEvent, AppParams, DebugStats, IKeyboardInput, IRenderer, IUI, IVisionSystem, LeaderboardEntry, MenuKey,
@@ -31,6 +31,10 @@ import { browserStorage } from './storage';
 import { applyTutorialDone, isTutorialDone, setTutorialDone, tutorialCleared, tutorialReenabled } from './tutorial';
 
 const r3 = (v: number): number => Math.round(v * 1000) / 1000;
+
+/** Vision rejected a model/camera switch but kept the previous one running (KeptPreviousError). */
+const keptPrevious = (e: unknown): boolean =>
+  typeof e === 'object' && e !== null && (e as { keptPrevious?: unknown }).keptPrevious === true;
 
 export interface AppDebugState {
   screen: Screen;
@@ -106,6 +110,8 @@ export class App {
   /** Current model load; the camera and calibration wait for it (GPU init can block ~7 s). */
   private modelLoad: Promise<void> | null = null;
   private modelReady = false;
+  /** Model the vision system is actually running (null until the first load succeeds). */
+  private activeModel: Settings['model'] | null = null;
   /** Calibration deferred until the model + camera are running. */
   private calibPending = false;
   // lobby
@@ -202,6 +208,7 @@ export class App {
     this.audio.setVolumes(this.settings.musicVolume, this.settings.sfxVolume);
 
     window.addEventListener('resize', this.onResize);
+    window.addEventListener('storage', this.onStorage);
     document.addEventListener('visibilitychange', this.onVisibility);
     // Any user gesture unlocks audio (autostart / keyboard players never click the boot button).
     window.addEventListener('pointerdown', this.onUnlock, { capture: true });
@@ -229,6 +236,7 @@ export class App {
     this.running = false;
     cancelAnimationFrame(this.rafId);
     window.removeEventListener('resize', this.onResize);
+    window.removeEventListener('storage', this.onStorage);
     document.removeEventListener('visibilitychange', this.onVisibility);
     window.removeEventListener('pointerdown', this.onUnlock, { capture: true });
     window.removeEventListener('keydown', this.onUnlock, { capture: true });
@@ -248,6 +256,11 @@ export class App {
   private readonly onResize = (): void => {
     if (this.graphics !== 'ok') return;
     this.guard('renderer.resize', () => this.renderer.resize(window.innerWidth, window.innerHeight));
+  };
+
+  /** Another tab wrote the leaderboard: show its entries here too. */
+  private readonly onStorage = (e: StorageEvent): void => {
+    if (e.key === null || e.key === STORAGE_KEYS.leaderboard) this.leaderboard.reload();
   };
 
   private readonly onVisibility = (): void => {
@@ -319,16 +332,29 @@ export class App {
     if (!v) return;
     this.loadingSince = performance.now() / 1000;
     this.modelReady = false;
-    const load = v.loadModel(this.settings.model);
+    const prevModel = this.activeModel;
+    const model = this.settings.model;
+    const load = v.loadModel(model);
     this.modelLoad = load;
     load.then(
       () => {
-        if (this.modelLoad === load) this.modelReady = true;
+        if (this.modelLoad === load) {
+          this.modelReady = true;
+          this.activeModel = model;
+        }
         this.note('model-ready');
       },
       () => {},
     );
     load.catch((e: unknown) => {
+      if (keptPrevious(e) && this.vision === v && this.modelLoad === load) {
+        // The old model still tracks: stay ready and put the setting back.
+        this.modelReady = true;
+        if (prevModel) this.revertSettings({ model: prevModel });
+        this.raiseToast(`Couldn't load the ${model} model, still using ${prevModel ?? 'the previous one'}.`);
+        console.warn('[app] model switch failed, kept the previous model:', e);
+        return;
+      }
       this.report('vision.loadModel', e);
       if (this.vision === v && (this.screen === 'boot' || this.screen === 'lobby' || this.screen === 'countdown')) {
         this.showCameraError(modelErrorMessage(e, v.error));
@@ -555,11 +581,48 @@ export class App {
     if (prev.musicVolume !== s.musicVolume || prev.sfxVolume !== s.sfxVolume) this.audio.setVolumes(s.musicVolume, s.sfxVolume);
     if (prev.quality !== s.quality) this.guard('renderer.setQuality', () => this.renderer.setQuality(s.quality));
     if (prev.model !== s.model) this.loadModel();
-    if (prev.cameraId !== s.cameraId && this.vision && this.vision.status !== 'idle') {
-      this.vision.startCamera(s.cameraId).then(
-        () => void this.refreshCameras(),
-        (e: unknown) => this.report('vision.startCamera', e),
+    const v = this.vision;
+    if (prev.cameraId !== s.cameraId && v && v.status !== 'idle') {
+      v.startCamera(s.cameraId).then(
+        () => {
+          void this.refreshCameras();
+          if (this.vision === v) this.recalibrateAfterCameraSwitch();
+        },
+        (e: unknown) => {
+          if (keptPrevious(e) && this.vision === v) {
+            this.revertSettings({ cameraId: prev.cameraId });
+            this.raiseToast("Couldn't switch cameras (is another app using it?). Still using the previous camera.");
+            console.warn('[app] camera switch failed, kept the previous camera:', e);
+            return;
+          }
+          this.report('vision.startCamera', e);
+        },
       );
+    }
+  }
+
+  /** Put settings back after a switch that could not be applied, without re-triggering it. */
+  private revertSettings(patch: Partial<Settings>): void {
+    this.stored = mergeSettings(this.stored, patch);
+    this.settings = mergeSettings(this.settings, patch);
+    this.settingsStore.save(this.stored);
+  }
+
+  /** New camera = new framing: the lane zones and baselines from the old one no longer apply. */
+  private recalibrateAfterCameraSwitch(): void {
+    const v = this.vision;
+    if (!v) return;
+    if (this.screen === 'countdown') {
+      v.resetCalibration();
+      this.calibPending = true;
+      this.frame = null;
+      this.startCalibrationIfReady();
+    } else if (this.screen === 'playing' || this.screen === 'paused') {
+      // Pause so the players stand still for the new baseline, then resume as usual.
+      if (this.screen === 'playing') this.enterPaused('user');
+      v.resetCalibration();
+      for (let i = 0; i < this.session.count; i++) v.startCalibration(i as PlayerId);
+      this.raiseToast('New camera: stand still for a moment while it recalibrates.');
     }
   }
 
@@ -674,6 +737,9 @@ export class App {
     }
     this.guard('renderer.setPlayerCount', () => this.renderer.setPlayerCount(n));
     this.guard('keyboard.setPlayerCount', () => this.keyboard.setPlayerCount(n));
+    // A new run: drop any jetpack rumble / slowmo feel left over from the last one.
+    this.audio.clearPowerUps();
+    this.audio.setPaused(false);
     this.countdown.reset();
     this.countdownValue = 3;
     this.countdownHolding = false;
@@ -714,6 +780,7 @@ export class App {
     this.resume.reset();
     this.audio.playUi('pause');
     this.audio.setChargeLevel(0);
+    this.audio.setPaused(true);
     this.setScreen('paused', performance.now() / 1000);
   }
 
@@ -722,6 +789,7 @@ export class App {
     this.applyLanes();
     this.queue.length = 0;
     this.audio.playUi('resume');
+    this.audio.setPaused(false);
     if (this.stickyToast === CAMERA_LOST_HINT) this.stickyToast = KEYBOARD_HINT;
     this.setScreen('playing', now);
   }
@@ -793,7 +861,8 @@ export class App {
   // ---------------------------------------------------------------------------
 
   private readonly tick = (tMs: number): void => {
-    requestAnimationFrame(this.tick);
+    if (!this.running) return;
+    this.rafId = requestAnimationFrame(this.tick);
     const t0 = performance.now();
     const dtRaw = Math.max(0, (t0 - this.last) / 1000);
     this.last = t0;

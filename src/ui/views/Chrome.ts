@@ -84,14 +84,20 @@ export class CornerButtons {
   private readonly show: Show;
   private readonly muted: Flag;
   private isMuted = false;
+  private readonly muteBtn: HTMLButtonElement;
 
   constructor(emit: Emit) {
     const mute = button('bs-corner__btn bs-corner__mute', icon(ICONS.speaker, 'bs-corner__icon'), h('i', 'bs-corner__slash'));
     mute.title = 'Mute (M)';
+    mute.setAttribute('aria-label', 'Mute sound');
+    mute.setAttribute('aria-pressed', 'false');
+    this.muteBtn = mute;
     const gear = button('bs-corner__btn', icon(ICONS.gear, 'bs-corner__icon'));
     gear.title = 'Settings (`)';
+    gear.setAttribute('aria-label', 'Settings');
     const full = button('bs-corner__btn', icon(ICONS.fullscreen, 'bs-corner__icon'));
     full.title = 'Fullscreen (F)';
+    full.setAttribute('aria-label', 'Fullscreen');
     mute.addEventListener('click', (e) => {
       e.stopPropagation();
       emit({ type: 'settings-change', settings: { muted: !this.isMuted } });
@@ -111,6 +117,7 @@ export class CornerButtons {
 
   update(m: UIModel): void {
     this.show.set(CORNER_SCREENS.includes(m.screen) && !m.settingsOpen);
+    if (m.settings.muted !== this.isMuted) this.muteBtn.setAttribute('aria-pressed', String(m.settings.muted));
     this.isMuted = m.settings.muted;
     this.muted.set(m.settings.muted);
   }

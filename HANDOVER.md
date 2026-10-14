@@ -20,7 +20,7 @@ self-hosted in `public/`), Vitest 5, TypeScript 7, procedural Web Audio + proced
 - Gates: typecheck clean, all unit tests green, `node e2e/run.mjs` 12/12. Latest round added swept collisions, ~120 ms faster lane detection, a compact tutorial pill, a simpler first-time flow, a once-only tutorial, and an arm-mimic runner (Settings → "Copy my moves").
 
 ## In progress / open items
-1. **New power-ups** (`jetpack`, `slowmo`, `star`, `coinRain`) and the harder tuning are done across game, render, UI and audio. All 238 unit tests pass (15 files). Jetpack and coinRain coins are laid by World, not the generator, so 2P tracks stay identical.
+1. **New power-ups** (`jetpack`, `slowmo`, `star`, `coinRain`) and the harder tuning are done across game, render, UI and audio. All unit tests pass. Jetpack and coinRain coins are laid by World, not the generator, so 2P tracks stay identical.
 2. **Deployed on Vercel:** https://body-surfers-steel.vercel.app (project `body-surfers`, team tiger-strakes-projects). Redeploy with `npx vercel --prod --yes --name body-surfers`. The `--name` flag is needed because the folder name has a space.
 3. **Git:** private repo https://github.com/tigerstrake/body-surfers (branch `main`). Commit and push after each working change. A Vercel deploy always needs `npx vercel --prod --yes --name body-surfers`; check that the output says `READY` and that the live site shows the change.
 4. Nice-to-haves: seated/arms-only accessibility mode; runner skins; "save my card" button (reuse `renderSelfieCard` in `src/hall/card.ts`); more crash quips and names.
@@ -53,6 +53,14 @@ Test handle in the browser: `window.__bodySurfers.state()` and `window.__bodySur
 - `src/input`: keyboard.
 - `src/app`: state machine, fixed-step loop, input routing, stores, booth broadcast.
 - `src/hall`: second-screen page.
+
+## Robustness notes (2026-10-13 pass)
+- A failed **model or camera switch** in Settings keeps the previous one running (`KeptPreviousError` in `src/vision/VisionSystem.ts`); the app reverts the setting and shows a toast instead of erroring.
+- Switching cameras mid-run pauses and recalibrates (new framing ⇒ new lane zones).
+- `IAudio.clearPowerUps()` / `setPaused()`: a new countdown drops leftover jetpack/slowmo audio; pause silences the rumble. A crash clears that player's power-up audio (2P).
+- Leaderboard writes are read-modify-write and App listens for `storage` events, so two game tabs no longer overwrite each other.
+- `prefers-reduced-motion` (`src/shared/motion.ts`) turns off camera shake, FOV kicks, JS pops and hall confetti, and softens the crash flash. `src/ui/announcer.ts` feeds an `aria-live` region.
+- `public/mediapipe/wasm` no longer ships the unused `*_module_internal` build; three.js and MediaPipe are separate cached chunks (`vite.config.ts`).
 
 ## Hard-won lessons
 - **Webcam freeze bug (fixed):** Chrome's `requestVideoFrameCallback` can report a constant `mediaTime` for live webcam streams. Key new frames on `presentedFrames` (`src/vision/VisionSystem.ts` frame watch). The fake camera hid this bug, because canvas streams do advance `mediaTime`.
