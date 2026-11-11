@@ -5,10 +5,10 @@ your laptop webcam to dodge trains, and race a friend in split-screen.
 
 ## Inspiration
 
-Everyone has played Subway Surfers with a thumb. We wanted to know what it feels like with
+Everyone has played Subway Surfers with a thumb. I wanted to know what it feels like with
 your whole body: actually jumping over the barrier, actually ducking under the bar. Motion
 games usually need a Kinect, a console or a VR headset. Almost every laptop has a webcam,
-and pose estimation now runs in real time in a browser tab. We wanted something you could
+and pose estimation now runs in real time in a browser tab. I wanted something you could
 walk up to at a booth and play in five seconds, with no install and nothing to hold.
 
 ## What it does
@@ -35,7 +35,7 @@ walk up to at a booth and play in five seconds, with no install and nothing to h
   each move. It shows once per browser.
 - Keyboard fallback and an AI autopilot for when the camera or the lighting does not cooperate.
 
-## How we built it
+## How I built it
 
 - **TypeScript + Vite** web app, fully static, no backend.
 - **MediaPipe Tasks Vision** PoseLandmarker (BlazePose, lite or full model) running on the
@@ -54,16 +54,16 @@ walk up to at a booth and play in five seconds, with no install and nothing to h
   five liveries, canvas-generated graffiti, a cartoon runner with procedural animation, and
   split-screen viewports.
 - **Procedural Web Audio** for every sound and the music loop. No audio files.
-- **Contract-first multi-agent build with Claude Code.** We first wrote a masterplan and a
+- **Contract-first multi-agent build with Claude Code.** I first wrote a masterplan and a
   frozen set of shared TypeScript contracts (`src/shared/types.ts`, `constants.ts`) plus
-  stubs, so the project type-checked from minute one. Then we ran parallel Claude Code
+  stubs, so the project type-checked from minute one. Then I ran parallel Claude Code
   agents, each owning one folder: vision, gameplay, rendering, UI, audio and input, app
   wiring, booth display, testing and docs. Agents could only edit their own paths and had to
   propose contract changes instead of making them. Each agent checked its own work with
   sandbox pages and a headless screenshot script, and an integration gate
   (`scripts/check.sh`) ran typecheck, unit tests, the build and autopilot smoke runs.
 
-## Challenges we ran into
+## Challenges I ran into
 
 - **Turning noisy landmarks into crisp game input.** A jump is a 0.3-second event, and the
   difference between "jumping" and "leaning in to look at the screen" is small. Velocity
@@ -78,9 +78,9 @@ walk up to at a booth and play in five seconds, with no install and nothing to h
 - **Coordinating many parallel agents** without them overwriting each other or drifting
   apart on interfaces.
 
-## Accomplishments that we're proud of
+## Accomplishments that I'm proud of
 
-- It is playable with your body through a normal laptop webcam; we tested it ourselves with
+- It is playable with your body through a normal laptop webcam; I tested it myself with
   real cameras, not only the synthetic fake-camera harness.
 - Zero-touch flow: walk up, raise hands, play, crash, laugh at your selfie, raise hands again.
 - Real 2-player split-screen racing on one laptop camera.
@@ -89,7 +89,7 @@ walk up to at a booth and play in five seconds, with no install and nothing to h
 - 238 unit tests and 12 end-to-end Playwright scenarios, including a synthetic webcam person
   (`tools/fakecam`) that drives the real vision pipeline.
 
-## What we learned
+## What I learned
 
 - Gesture design is mostly about rejecting what is not a gesture.
 - Positioning feedback (too close, head cut off) matters as much as the detection itself.

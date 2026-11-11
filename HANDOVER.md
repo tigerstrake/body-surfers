@@ -6,8 +6,8 @@ Last updated: 2026-10-08.
 ## What this is
 A Subway-Surfers-style endless runner played with your body through a laptop webcam:
 step left/right to change lanes, jump to jump, squat to roll. 1P or 2P split-screen race,
-crash-selfie leaderboard, and a second-screen Hall of Fame (`hall.html`). Built at a
-casual hackathon with friends. The demo has already happened.
+crash-selfie leaderboard, and a second-screen Hall of Fame (`hall.html`). Built solo for a
+casual hackathon where I competed against friends. The demo has already happened.
 
 Stack: TypeScript, Vite 8, Three.js r186, MediaPipe Tasks Vision 1.1 (PoseLandmarker,
 self-hosted in `public/`), Vitest 5, TypeScript 7, procedural Web Audio + procedural art.
@@ -22,7 +22,7 @@ self-hosted in `public/`), Vitest 5, TypeScript 7, procedural Web Audio + proced
 ## In progress / open items
 1. **New power-ups** (`jetpack`, `slowmo`, `star`, `coinRain`) and the harder tuning are done across game, render, UI and audio. All unit tests pass. Jetpack and coinRain coins are laid by World, not the generator, so 2P tracks stay identical.
 2. **Deployed on Vercel:** https://body-surfers-steel.vercel.app (project `body-surfers`, team tiger-strakes-projects). Redeploy with `npx vercel --prod --yes --name body-surfers`. The `--name` flag is needed because the folder name has a space.
-3. **Git:** private repo https://github.com/tigerstrake/body-surfers (branch `main`). Commit and push after each working change. A Vercel deploy always needs `npx vercel --prod --yes --name body-surfers`; check that the output says `READY` and that the live site shows the change.
+3. **Git:** public repo https://github.com/tigerstrake/body-surfers (branch `main`). Commit and push after each working change. A Vercel deploy always needs `npx vercel --prod --yes --name body-surfers`; check that the output says `READY` and that the live site shows the change.
 4. Nice-to-haves: seated/arms-only accessibility mode; runner skins; "save my card" button (reuse `renderSelfieCard` in `src/hall/card.ts`); more crash quips and names.
 
 ## How to run

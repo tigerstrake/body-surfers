@@ -283,4 +283,4 @@ anywhere other than `localhost`. The pose models are about 6 MB (lite) and 9 MB 
 - All art, music and sound effects are procedural and generated in code.
 - Inspired by Subway Surfers (SYBO / Kiloo). This is an unaffiliated fan project.
 
-Built at a casual hackathon with friends. This repository does not include a license file.
+Built solo for a casual hackathon where I competed against friends. This repository does not include a license file.

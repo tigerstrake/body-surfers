@@ -24,7 +24,7 @@ behind the title, Hall of Fame on the second screen, tape mark on the floor abou
 | 1:05 | Invite a judge: "Want to race?" Restart with both of you raising hands. | "If a second person is in frame, they get four seconds to raise their hands and join. Same track, split-screen." |
 | 1:15 | Race. | "Each player's identity is locked once they join, so people walking behind us are ignored." |
 | 1:35 | Someone crashes. Point at the selfie and the second screen. | "When you crash, it grabs your crash face. That's the leaderboard, and the Hall of Fame on the other screen updates live." |
-| 1:45 | Step aside. | "It's a static web app, pose tracking runs on-device with MediaPipe, and the video never leaves the laptop. We built it with a contract-first, multi-agent workflow in Claude Code: frozen shared types, one agent per module, automated screenshot and smoke tests." |
+| 1:45 | Step aside. | "It's a static web app, pose tracking runs on-device with MediaPipe, and the video never leaves the laptop. I built it with a contract-first, multi-agent workflow in Claude Code: frozen shared types, one agent per module, automated screenshot and smoke tests." |
 | 2:00 | Done. | "Questions?" |
 
 ## Fallbacks
